@@ -1,0 +1,75 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicedoc/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "com.meetvora.desktop",
+  "productName": "Meetvora",
+  "directories": {
+    "output": "release"
+  },
+  "asar": true,
+  "files": [
+    "dist/**/*",
+    "dist-electron/**/*"
+  ],
+  "extraResources": [
+    {
+      "from": ".env.example",
+      "to": ".env.example"
+    }
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "build/icon.png",
+    "artifactName": "${productName}-${version}-win-setup.${ext}"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true
+  },
+  "mac": {
+    "target": [
+      {
+        "target": "dmg",
+        "arch": ["x64", "arm64"]
+      }
+    ],
+    "icon": "build/icon.icns",
+    "category": "public.app-category.productivity",
+    "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
+    "hardenedRuntime": true,
+    "gatekeeperAssess": false,
+    "entitlements": "build/entitlements.mac.plist",
+    "entitlementsInherit": "build/entitlements.mac.plist"
+  },
+  "linux": {
+    "target": [
+      {
+        "target": "AppImage",
+        "arch": ["x64"]
+      },
+      {
+        "target": "deb",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "build/icon.png",
+    "category": "Office",
+    "artifactName": "${productName}-${version}-linux-${arch}.${ext}",
+    "desktop": {
+      "Name": "Meetvora",
+      "Comment": "AI-powered stealth meeting assistant",
+      "Categories": "Office;Utility;"
+    }
+  },
+  "dmg": {
+    "contents": [
+      { "x": 130, "y": 220 },
+      { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+    ]
+  }
+}

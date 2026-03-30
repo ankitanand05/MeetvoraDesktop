@@ -1,0 +1,63 @@
+# ── Dependencies ──
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+
+# ── Build outputs ──
+dist/
+dist-electron/
+release/
+*.jsbundle
+
+# ── OS files ──
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ── IDE ──
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Secrets / env ──
+.env
+.env.local
+.env.*.local
+
+# ── Electron builder cache ──
+.cache/
+
+# ── SQLite DB files ──
+*.db
+*.db-wal
+*.db-shm
+
+# ── Generated icons ──
+build/icon-*.png
+build/icon.ico
+build/icon.icns
+
+# ── Platform native ──
+*.keystore
+!debug.keystore
+.kotlin/
+.gradle/
+.cxx/
+
+# ── Testing ──
+coverage/
+
+# ── Yarn ──
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+
+# ── Misc ──
+*.log
+*.hprof
+*.tsbuildinfo

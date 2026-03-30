@@ -1,0 +1,245 @@
+/**
+ * Electron Preload — Context Bridge API
+ * Exposes window.electronAPI to the renderer securely.
+ */
+
+import { contextBridge, ipcRenderer } from 'electron';
+
+/* ─── Types ──────────────────────────────────── */
+
+export type AppStatus = 'idle' | 'listening' | 'processing' | 'error';
+
+export interface TranscriptEvent {
+  text: string;
+  timestamp: string;
+}
+
+export interface AIChunkEvent {
+  chunk: string;
+  sessionId: string;
+}
+
+export interface AICompleteEvent {
+  fullText: string;
+  sessionId: string;
+}
+
+export interface ErrorEvent {
+  message: string;
+  code?: string;
+}
+
+/* ─── API Object ──────────────────────────────── */
+
+const electronAPI = {
+
+  /* ─── Audio ───────────────────────────────── */
+
+  startCapture: (): Promise<string> =>
+    ipcRenderer.invoke('audio:start'),
+
+  stopCapture: (sessionId: string): Promise<void> =>
+    ipcRenderer.invoke('audio:stop', sessionId),
+
+  sendAudioChunk: (buffer: ArrayBuffer): void => {
+    if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 1000) return;
+    ipcRenderer.send('audio:chunk', buffer);
+  },
+
+  sendVoiceQuestion: (buffer: ArrayBuffer): void => {
+    if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 500) return;
+    ipcRenderer.send('voice:question', buffer);
+  },
+
+  sendTextQuestion: (question: string): void => {
+    if (!question || typeof question !== 'string' || !question.trim()) return;
+    ipcRenderer.send('text:question', question.trim());
+  },
+
+  captureScreenshot: (): void => {
+    ipcRenderer.send('screenshot:capture');
+  },
+
+  /* ─── Context ─────────────────────────────── */
+
+  setInterviewContext: (data: { profile: string; jobDescription: string }): Promise<boolean> =>
+    ipcRenderer.invoke('context:set-interview', data),
+
+  clearInterviewContext: (): Promise<boolean> =>
+    ipcRenderer.invoke('context:clear-interview'),
+
+  setMeetingContext: (data: { agenda: string; attendees: string }): Promise<boolean> =>
+    ipcRenderer.invoke('context:set-meeting', data),
+
+  setCustomContext: (data: { systemPrompt: string }): Promise<boolean> =>
+    ipcRenderer.invoke('context:set-custom', data),
+
+  setConductorContext: (data: {
+    resume: string;
+    jobDescription: string;
+    difficulty: string;
+    questionCount: number;
+    focusAreas: string;
+  }): Promise<boolean> =>
+    ipcRenderer.invoke('context:set-conductor', data),
+
+  conductorNextQuestion: (): void =>
+    ipcRenderer.send('conductor:next-question'),
+
+  /* ─── Sessions ─────────────────────────────── */
+
+  createSession: (): Promise<string> =>
+    ipcRenderer.invoke('session:create'),
+
+  endSession: (sessionId: string): Promise<void> =>
+    ipcRenderer.invoke('session:end', sessionId),
+
+  getSessions: (): Promise<any[]> =>
+    ipcRenderer.invoke('session:get-all'),
+
+  getSessionMessages: (sessionId: string): Promise<any[]> =>
+    ipcRenderer.invoke('session:get-messages', sessionId),
+
+  /* ─── Settings ─────────────────────────────── */
+
+  setApiKey: (key: string): Promise<void> => {
+    if (!key || typeof key !== 'string') return Promise.reject(new Error('Invalid API key'));
+    if (!key.startsWith('sk-')) return Promise.reject(new Error('API key must start with "sk-"'));
+    return ipcRenderer.invoke('settings:set-api-key', key.replace(/\s+/g, ''));
+  },
+
+  hasApiKey: (): Promise<boolean> =>
+    ipcRenderer.invoke('settings:has-api-key'),
+
+  saveModelPrefs: (prefs: {
+    chatModel?: string;
+    visionModel?: string;
+    transcriptModel?: string;
+  }): Promise<boolean> =>
+    ipcRenderer.invoke('settings:save-model-prefs', prefs),
+
+  loadModelPrefs: (): Promise<{
+    chatModel: string;
+    visionModel: string;
+    transcriptModel: string;
+  }> =>
+    ipcRenderer.invoke('settings:load-model-prefs'),
+
+  savePreferences: (prefs: {
+    answerSize?: string;
+    screenshotMode?: string;
+    customScreenshotPrompt?: string;
+    interviewLanguage?: string;
+  }): Promise<boolean> =>
+    ipcRenderer.invoke('settings:save-prefs', prefs),
+
+  loadPreferences: (): Promise<{
+    answerSize: string;
+    screenshotMode: string;
+    customScreenshotPrompt: string;
+    interviewLanguage: string;
+  }> =>
+    ipcRenderer.invoke('settings:load-prefs'),
+
+  /* ─── Window ───────────────────────────────── */
+
+  toggleAlwaysOnTop: (): Promise<boolean> =>
+    ipcRenderer.invoke('window:toggle-aot'),
+
+  toggleStealth: (): Promise<boolean> =>
+    ipcRenderer.invoke('window:toggle-stealth'),
+
+  positionWindow: (position: string): void =>
+    ipcRenderer.send('window:position', position),
+
+  toggleVisibility: (): void =>
+    ipcRenderer.send('window:toggle-visibility'),
+
+  toggleTeleprompter: (): Promise<boolean> =>
+    ipcRenderer.invoke('window:toggle-teleprompter'),
+
+  minimizeWindow: (): void =>
+    ipcRenderer.send('window:minimize'),
+
+  closeWindow: (): void =>
+    ipcRenderer.send('window:close'),
+
+  openExternal: (url: string): Promise<void> =>
+    ipcRenderer.invoke('shell:open-external', url),
+
+  /* ─── Auth ─────────────────────────────────── */
+
+  getUser: (): Promise<{ email: string; name: string; role: string } | null> =>
+    ipcRenderer.invoke('auth:get-user'),
+
+  signOut: (): Promise<void> =>
+    ipcRenderer.invoke('auth:sign-out'),
+
+  continueOffline: (): Promise<{ success: boolean; user: { email: string; name: string; role: string } }> =>
+    ipcRenderer.invoke('auth:continue-offline'),
+
+  login: (email: string, password: string): Promise<{ success: boolean; user?: { email: string; name: string; role: string }; error?: string }> =>
+    ipcRenderer.invoke('auth:login', { email, password }),
+
+  register: (name: string, email: string, password: string): Promise<{ success: boolean; user?: { email: string; name: string; role: string }; error?: string }> =>
+    ipcRenderer.invoke('auth:register', { name, email, password }),
+
+  getUserProfile: (): Promise<{ success: boolean; user?: any; subscription?: any; totalCredits?: number; error?: string }> =>
+    ipcRenderer.invoke('user:get-profile'),
+
+  getCredits: (): Promise<{ success: boolean; credits: number; error?: string }> =>
+    ipcRenderer.invoke('user:get-credits'),
+
+  onAuthSuccess: (callback: (data: { email: string; name: string }) => void) => {
+    const handler = (_: unknown, data: { email: string; name: string }) => callback(data);
+    ipcRenderer.on('auth:success', handler);
+    return () => ipcRenderer.removeListener('auth:success', handler);
+  },
+
+  /* ─── Events ───────────────────────────────── */
+
+  onTranscript: (callback: (data: TranscriptEvent) => void) => {
+    const handler = (_: unknown, data: TranscriptEvent) => callback(data);
+    ipcRenderer.on('transcript:new', handler);
+    return () => ipcRenderer.removeListener('transcript:new', handler);
+  },
+
+  onAIResponseChunk: (callback: (data: AIChunkEvent) => void) => {
+    const handler = (_: unknown, data: AIChunkEvent) => callback(data);
+    ipcRenderer.on('ai:response-chunk', handler);
+    return () => ipcRenderer.removeListener('ai:response-chunk', handler);
+  },
+
+  onAIResponseComplete: (callback: (data: AICompleteEvent) => void) => {
+    const handler = (_: unknown, data: AICompleteEvent) => callback(data);
+    ipcRenderer.on('ai:response-complete', handler);
+    return () => ipcRenderer.removeListener('ai:response-complete', handler);
+  },
+
+  onSuggestions: (callback: (data: { suggestions: string[] }) => void) => {
+    const handler = (_: unknown, data: { suggestions: string[] }) => callback(data);
+    ipcRenderer.on('ai:suggestions', handler);
+    return () => ipcRenderer.removeListener('ai:suggestions', handler);
+  },
+
+  onStealthChanged: (callback: (enabled: boolean) => void) => {
+    const handler = (_: unknown, enabled: boolean) => callback(enabled);
+    ipcRenderer.on('stealth:changed', handler);
+    return () => ipcRenderer.removeListener('stealth:changed', handler);
+  },
+
+  onStatusChange: (callback: (data: { status: AppStatus }) => void) => {
+    const handler = (_: unknown, data: { status: AppStatus }) => callback(data);
+    ipcRenderer.on('status:change', handler);
+    return () => ipcRenderer.removeListener('status:change', handler);
+  },
+
+  onError: (callback: (data: ErrorEvent) => void) => {
+    const handler = (_: unknown, data: ErrorEvent) => callback(data);
+    ipcRenderer.on('error:occurred', handler);
+    return () => ipcRenderer.removeListener('error:occurred', handler);
+  },
+};
+
+Object.freeze(electronAPI);
+contextBridge.exposeInMainWorld('electronAPI', electronAPI);
