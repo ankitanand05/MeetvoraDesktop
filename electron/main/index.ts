@@ -8,9 +8,12 @@ import path from 'path';
 
 const isDev = process.env.NODE_ENV === 'development';
 
-// Disable GPU HW acceleration — prevents transparent-window crashes on all platforms
+// Disable GPU HW acceleration on macOS only — on Windows disabling it breaks
+// transparent/frameless windows on many GPU drivers (renders black rectangle).
 const { app: earlyApp } = require('electron');
-earlyApp.disableHardwareAcceleration();
+if (process.platform === 'darwin') {
+  earlyApp.disableHardwareAcceleration();
+}
 
 // Resolve app root (asar in prod, project root in dev)
 const appRoot = isDev ? path.join(__dirname, '../..') : process.resourcesPath;
@@ -27,11 +30,15 @@ import {
   desktopCapturer,
   dialog,
   globalShortcut,
+  Tray,
+  Menu,
+  nativeImage,
 } from 'electron';
-import { registerIpcHandlers, isStealthActive } from '../ipc/handlers';
+import { registerIpcHandlers, isStealthActive, isPinnedActive } from '../ipc/handlers';
 import { initializeDatabase, closeDatabase } from '../storage/db';
 
 let mainWindow: BrowserWindow | null = null;
+let tray: Tray | null = null;
 
 /** Expose getter so other modules can access the main window */
 export function getMainWindow(): BrowserWindow | null {
@@ -56,30 +63,9 @@ if (process.defaultApp) {
 
 function handleDeepLink(url: string): void {
   console.log('[DeepLink] Received:', url);
-  try {
-    const parsed = new URL(url);
-    if (parsed.host === 'auth' || parsed.pathname.startsWith('//auth')) {
-      const token = parsed.searchParams.get('token');
-      const email = parsed.searchParams.get('email');
-      const name = parsed.searchParams.get('name');
-
-      if (token && email) {
-        const { setConfig } = require('./storage/config');
-        setConfig('auth-token', token);
-        setConfig('user-email', email);
-        if (name) setConfig('user-name', name);
-
-        console.log('[DeepLink] Auth success for', email);
-
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('auth:success', { email, name: name || '' });
-          mainWindow.show();
-          mainWindow.focus();
-        }
-      }
-    }
-  } catch (err) {
-    console.error('[DeepLink] Failed to parse URL:', err);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show();
+    mainWindow.focus();
   }
 }
 
@@ -103,6 +89,9 @@ if (!gotLock) {
         mainWindow.setSkipTaskbar(true);
         mainWindow.setTitle(' ');
         mainWindow.setAlwaysOnTop(true, 'screen-saver');
+      } else if (isPinnedActive()) {
+        mainWindow.setContentProtection(true);
+        mainWindow.setAlwaysOnTop(true, 'screen-saver');
       }
       mainWindow.focus();
     }
@@ -120,22 +109,25 @@ if (!gotLock) {
 
 function createWindow(): void {
   const isMac = process.platform === 'darwin';
+  const isWin = process.platform === 'win32';
   const isLinux = process.platform === 'linux';
 
   mainWindow = new BrowserWindow({
-    width: 420,
+    width: 560,
     height: 720,
-    minWidth: 360,
+    minWidth: 500,
     minHeight: 500,
     frame: false,
-    resizable: true,
+    resizable: false,
     show: false,
-    transparent: true,
-    backgroundColor: '#00000000',
+    // Transparent windows are unreliable on Windows with many GPU drivers.
+    // Only enable on macOS/Linux where HW accel is disabled.
+    transparent: !isWin,
+    backgroundColor: isWin ? '#1a1a2e' : '#00000000',
     hasShadow: false,
     // macOS-specific: use hidden titlebar for native feel
     ...(isMac && { titleBarStyle: 'hiddenInset' }),
-    icon: path.join(appRoot, 'build', isLinux ? 'icon.png' : 'icon.png'),
+    icon: path.join(appRoot, 'build', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -231,26 +223,104 @@ app.whenReady().then(async () => {
   registerIpcHandlers();
   createWindow();
 
-  // Cross-platform stealth shortcut
-  // macOS: Cmd+Shift+` / Others: Ctrl+Shift+`
-  const shortcut = process.platform === 'darwin' ? 'Cmd+Shift+`' : 'Ctrl+Shift+`';
-  const registered = globalShortcut.register(shortcut, () => {
+  /* ── System Tray ── */
+  // Critical: provides a guaranteed way to show/recover the window,
+  // even when the global shortcut fails (non-US keyboard layouts).
+  try {
+    const iconPath = path.join(appRoot, 'build', 'icon.png');
+    let trayIcon: Electron.NativeImage;
+    try {
+      trayIcon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
+    } catch {
+      trayIcon = nativeImage.createEmpty();
+    }
+    tray = new Tray(trayIcon);
+    tray.setToolTip('Meetvora');
+    const trayMenu = Menu.buildFromTemplate([
+      {
+        label: 'Show / Hide',
+        click: () => {
+          if (!mainWindow) return;
+          if (mainWindow.isVisible() && !mainWindow.isMinimized()) {
+            mainWindow.hide();
+          } else {
+            if (mainWindow.isMinimized()) mainWindow.restore();
+            mainWindow.show();
+            mainWindow.focus();
+            if (isStealthActive()) {
+              mainWindow.setContentProtection(true);
+              mainWindow.setSkipTaskbar(true);
+              mainWindow.setTitle(' ');
+              mainWindow.setAlwaysOnTop(true, 'screen-saver');
+            } else if (isPinnedActive()) {
+              mainWindow.setContentProtection(true);
+              mainWindow.setAlwaysOnTop(true, 'screen-saver');
+            }
+          }
+        },
+      },
+      { type: 'separator' },
+      { label: 'Quit', click: () => app.quit() },
+    ]);
+    tray.setContextMenu(trayMenu);
+    tray.on('double-click', () => {
+      if (!mainWindow) return;
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      if (isPinnedActive() && !isStealthActive()) {
+        mainWindow.setContentProtection(true);
+        mainWindow.setAlwaysOnTop(true, 'screen-saver');
+      }
+    });
+  } catch (err) {
+    console.warn('[Main] Failed to create tray icon:', err);
+  }
+
+  /* ── Global Shortcut — with fallback ── */
+  // The toggle function shared by all shortcut keys + tray.
+  // "accessible" = visible AND not minimized. A minimized window has
+  // isVisible()===true on Windows, so we must check both.
+  const toggleWindow = () => {
     if (!mainWindow) return;
-    if (mainWindow.isVisible()) {
+    const accessible = mainWindow.isVisible() && !mainWindow.isMinimized();
+    if (accessible) {
       mainWindow.hide();
     } else {
+      // Restore first so the window isn't in a minimized state when shown
+      if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
-      mainWindow.restore();
       if (isStealthActive()) {
         mainWindow.setContentProtection(true);
         mainWindow.setSkipTaskbar(true);
         mainWindow.setTitle(' ');
+        mainWindow.setAlwaysOnTop(true, 'screen-saver');
+      } else if (isPinnedActive()) {
+        // Re-apply pin props (Windows can lose them after hide/restore)
+        mainWindow.setContentProtection(true);
+        mainWindow.setAlwaysOnTop(true, 'screen-saver');
       }
-      mainWindow.setAlwaysOnTop(true, 'screen-saver');
       mainWindow.focus();
     }
-  });
-  if (!registered) console.warn('[Main] Failed to register global shortcut');
+  };
+
+  // Try the primary shortcut, then a fallback that works on all keyboard layouts.
+  const primary = process.platform === 'darwin' ? 'Cmd+Shift+`' : 'Ctrl+Shift+`';
+  const fallback = process.platform === 'darwin' ? 'Cmd+Shift+F12' : 'Ctrl+Shift+F12';
+
+  const regPrimary = globalShortcut.register(primary, toggleWindow);
+  if (!regPrimary) {
+    console.warn(`[Main] Primary shortcut (${primary}) failed — trying fallback (${fallback})`);
+  }
+  const regFallback = globalShortcut.register(fallback, toggleWindow);
+  if (!regFallback) {
+    console.warn(`[Main] Fallback shortcut (${fallback}) also failed`);
+  }
+  if (regPrimary || regFallback) {
+    console.log(`[Main] Global shortcut registered: ${regPrimary ? primary : ''} ${regFallback ? fallback : ''}`);
+  } else {
+    console.error('[Main] No global shortcuts could be registered — use the tray icon to show/hide');
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -274,6 +344,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   globalShortcut.unregisterAll();
+  if (tray) { tray.destroy(); tray = null; }
   closeDatabase();
 });
 

@@ -164,7 +164,7 @@ const Controls: React.FC<ControlsProps> = ({
             style={{ color: 'var(--text-muted)' }}
             onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface-hover)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
             onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-muted)'; }}
-            title="Clear (Ctrl+Shift+X)"
+            aria-label="Clear"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="3 6 5 6 21 6" />
@@ -186,7 +186,7 @@ const Controls: React.FC<ControlsProps> = ({
                 ? (isDark ? 'rgba(239,68,68,0.3)' : '#fecaca')
                 : (isDark ? 'rgba(139,92,246,0.25)' : '#ddd6fe')}`,
             }}
-            title={isRecordingMic ? 'Stop & send (Ctrl+Shift+M)' : 'Voice (Ctrl+Shift+M)'}
+            aria-label="Voice"
           >
             {isRecordingMic && (
               <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
@@ -213,7 +213,7 @@ const Controls: React.FC<ControlsProps> = ({
               color: isTextOpen ? '#06b6d4' : (isDark ? '#22d3ee' : '#0891b2'),
               border: `1px solid ${isDark ? 'rgba(6,182,212,0.25)' : '#a5f3fc'}`,
             }}
-            title="Type a question (Ctrl+Shift+T)"
+            aria-label="Type a question"
           >
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
@@ -230,7 +230,7 @@ const Controls: React.FC<ControlsProps> = ({
               color: '#10b981',
               border: `1px solid ${isDark ? 'rgba(16,185,129,0.3)' : '#a7f3d0'}`,
             }}
-            title="Start (Ctrl+Shift+S)"
+            aria-label="Start"
           >
             <svg width="13" height="13" viewBox="0 0 12 12" fill="currentColor">
               <polygon points="3,1 10,6 3,11" />
@@ -247,7 +247,7 @@ const Controls: React.FC<ControlsProps> = ({
               color: '#ef4444',
               border: `1px solid ${isDark ? 'rgba(239,68,68,0.3)' : '#fecaca'}`,
             }}
-            title="Stop (Ctrl+Shift+S)"
+            aria-label="Stop"
           >
             <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor">
               <rect x="2" y="2" width="8" height="8" rx="1" />
@@ -264,7 +264,7 @@ const Controls: React.FC<ControlsProps> = ({
               color: '#3b82f6',
               border: `1px solid ${isDark ? 'rgba(59,130,246,0.25)' : '#bfdbfe'}`,
             }}
-            title="Screenshot (Ctrl+Shift+P)"
+            aria-label="Screenshot"
           >
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
@@ -283,7 +283,7 @@ const Controls: React.FC<ControlsProps> = ({
             }}
             onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface-hover)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
             onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-muted)'; }}
-            title="Settings"
+            aria-label="Settings"
           >
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="3" />

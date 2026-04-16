@@ -253,6 +253,11 @@ export function useSession(): UseSessionReturn {
     setChatMessages([]);
     setSuggestions([]);
     setError(null);
+    streamBufRef.current = '';
+    if (flushTimerRef.current !== null) {
+      clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
   }, []);
 
   const toggleAlwaysOnTop = useCallback(async () => {
@@ -286,13 +291,11 @@ export function useSession(): UseSessionReturn {
     });
   }, []);
 
-  // Ref to track the current AI message id for streaming
-  const currentAiMsgId = useRef<string | null>(null);
   // Mutable streaming buffer — avoids copying the entire chatMessages array on every token
   const streamBufRef = useRef('');
   const flushTimerRef = useRef<number | null>(null);
 
-  /** Flush accumulated chunks into React state (called at ~200ms intervals) */
+  /** Flush accumulated chunks into React state (called at ~60ms intervals) */
   const flushStreamBuffer = useCallback(() => {
     const buffered = streamBufRef.current;
     if (!buffered) return;
@@ -303,16 +306,17 @@ export function useSession(): UseSessionReturn {
       isStreaming: true,
     }));
 
+    // Pure updater — no side effects, safe for React Strict Mode double-invoke
     setChatMessages(prev => {
       const last = prev[prev.length - 1];
-      if (last && last.role === 'ai' && last.id === currentAiMsgId.current) {
+      // Append to existing AI streaming message
+      if (last && last.role === 'ai' && last.isStreaming) {
         const updated = [...prev];
-        updated[updated.length - 1] = { ...last, text: last.text + buffered, isStreaming: true };
+        updated[updated.length - 1] = { ...last, text: last.text + buffered };
         return updated;
       }
-      // Start a new AI message
+      // Start a new AI streaming message
       const newId = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      currentAiMsgId.current = newId;
       const next = [
         ...prev,
         { id: newId, role: 'ai' as const, text: buffered, timestamp: new Date().toISOString(), isStreaming: true },
@@ -323,38 +327,45 @@ export function useSession(): UseSessionReturn {
 
   const appendAIChunk = useCallback((chunk: string) => {
     streamBufRef.current += chunk;
-    // Schedule a flush if one isn't already pending (~200ms batching)
+    // Schedule a flush if one isn't already pending (~60ms batching for fast token display)
     if (flushTimerRef.current === null) {
       flushTimerRef.current = window.setTimeout(() => {
         flushTimerRef.current = null;
         flushStreamBuffer();
-      }, 200);
+      }, 60);
     }
   }, [flushStreamBuffer]);
 
   const completeAIResponse = useCallback((fullText: string) => {
-    // Cancel any pending flush and drain the buffer
+    // Cancel any pending flush
     if (flushTimerRef.current !== null) {
       clearTimeout(flushTimerRef.current);
       flushTimerRef.current = null;
     }
     streamBufRef.current = '';
 
-    setAiResponse({
-      text: fullText,
-      isStreaming: false,
-    });
-    // Finalize the current AI chat message
+    setAiResponse({ text: fullText, isStreaming: false });
+
+    // Pure updater — no side effects, safe for React Strict Mode double-invoke
     setChatMessages(prev => {
       const last = prev[prev.length - 1];
-      if (last && last.role === 'ai' && last.id === currentAiMsgId.current) {
+      // Finalize the active streaming message
+      if (last && last.role === 'ai' && last.isStreaming) {
         const updated = [...prev];
         updated[updated.length - 1] = { ...last, text: fullText, isStreaming: false };
         return updated;
       }
+      // No streaming message was started yet — create the completed message directly
+      if (fullText) {
+        const newId = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const next = [
+          ...prev,
+          { id: newId, role: 'ai' as const, text: fullText, timestamp: new Date().toISOString(), isStreaming: false },
+        ];
+        return next.length > MAX_CHAT_MESSAGES ? next.slice(-MAX_CHAT_MESSAGES) : next;
+      }
       return prev;
     });
-    currentAiMsgId.current = null;
   }, []);
 
   return {

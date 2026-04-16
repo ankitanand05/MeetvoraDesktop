@@ -32,7 +32,7 @@ export async function analyzeScreenshot(
   apiKey: string,
   callbacks: VisionStreamCallbacks,
   userPrompt?: string,
-  model = 'gpt-4o'
+  model = process.env.VISION_MODEL ?? 'gpt-4o'
 ): Promise<void> {
 
   const openai = new OpenAI({ apiKey });
@@ -96,7 +96,13 @@ Guidelines:
       const statusCode = error?.status || error?.response?.status;
 
       if (statusCode === 403) {
-        callbacks.onError(new Error('OpenAI API access denied for vision model.'));
+        // If the requested model is denied, fall back to gpt-4o-mini (supports vision via chat completions)
+        const FALLBACK = process.env.VISION_FALLBACK_MODEL ?? 'gpt-4o-mini';
+        if (model !== FALLBACK) {
+          console.log(`[Vision] 403 on model "${model}", falling back to "${FALLBACK}"`);
+          return analyzeScreenshot(screenshotBase64, apiKey, callbacks, userPrompt, FALLBACK);
+        }
+        callbacks.onError(new Error('OpenAI API access denied for vision model. Check your API key permissions.'));
         return;
       }
       if (statusCode === 401) {

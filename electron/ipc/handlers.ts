@@ -12,16 +12,9 @@ import {
   buildConversationPrompt,
   buildInterviewPrompt,
   buildInterviewTeleprompterPrompt,
-  buildMeetingAssistantPrompt,
-  buildCustomPrompt,
-  buildConductorQuestionPrompt,
-  buildConductorEvaluatePrompt,
   buildFollowUpSuggestionsPrompt,
   buildSummaryPrompt,
   InterviewContext,
-  MeetingContext,
-  CustomContext,
-  ConductorContext,
   type PromptPair,
 } from '../ai/promptBuilder';
 import { analyzeScreenshot } from '../ai/visionClient';
@@ -35,6 +28,8 @@ let activeSessionId: string | null = null;
 let isProcessingChunk = false;
 const processingQueue: Array<{ buffer: Buffer; sessionId: string }> = [];
 let isProcessingQueue = false;
+/** Safety cap — if the queue grows beyond this, drop the oldest item */
+const MAX_QUEUE_SIZE = 5;
 
 async function drainQueue(): Promise<void> {
   if (isProcessingQueue) return;
@@ -55,9 +50,6 @@ async function drainQueue(): Promise<void> {
 
 // Interview context (set via SetupScreen)
 let interviewContext: InterviewContext | null = null;
-let meetingContext: MeetingContext | null = null;
-let customContext: CustomContext | null = null;
-let conductorContext: ConductorContext | null = null;
 let teleprompterActive = false;
 
 // ─── USER PREFERENCES (persisted via settings:save-prefs) ──────────────────
@@ -76,8 +68,8 @@ let userPrefs: UserPrefs = {
   screenshotMode: 'simple',
   customScreenshotPrompt: '',
   interviewLanguage: 'en',
-  chatModel: 'gpt-4o-mini',
-  visionModel: 'gpt-4o',
+  chatModel: 'gpt-5-mini',
+  visionModel: 'gpt-4o-mini',
   transcriptModel: 'gpt-4o-mini-transcribe-2025-12-15',
 };
 
@@ -87,6 +79,16 @@ function answerSizeInstruction(): string {
     case 'small': return '\n\nIMPORTANT: Be very concise. Limit answers to 2-3 sentences max.';
     case 'big':   return '\n\nIMPORTANT: Give comprehensive, detailed answers with examples and thorough explanations.';
     default:      return '';
+  }
+}
+
+/** Scale maxCompletionTokens based on user answer-size preference */
+function scaleTokens(tokens: number | undefined): number | undefined {
+  if (!tokens) return tokens;
+  switch (userPrefs.answerSize) {
+    case 'small': return Math.round(tokens * 0.5);
+    case 'big':   return Math.round(tokens * 1.8);
+    default:      return tokens;
   }
 }
 
@@ -219,12 +221,10 @@ function buildPromptForMode(text: string, history: string = '') {
   const applySize = (pair: PromptPair): PromptPair => ({
     ...pair,
     instructions: pair.instructions + sizeSuffix,
+    maxCompletionTokens: scaleTokens(pair.maxCompletionTokens),
   });
   if (interviewContext && teleprompterActive) return applySize(buildInterviewTeleprompterPrompt(text, interviewContext, history));
   if (interviewContext) return applySize(buildInterviewPrompt(text, interviewContext, history));
-  if (meetingContext) return applySize(buildMeetingAssistantPrompt(text, meetingContext, history));
-  if (customContext) return applySize(buildCustomPrompt(text, customContext, history));
-  if (conductorContext) return applySize(buildConductorEvaluatePrompt(text, conductorContext, history));
   return applySize(buildConversationPrompt(text, history));
 }
 
@@ -362,162 +362,12 @@ function splitWavBuffer(wavBuffer: Buffer): Buffer[] {
   return segments;
 }
 
-// ─── Backend API helpers (module-level for use in processAudioChunk) ─────
-
-const BACKEND_URL = process.env.MEETVORA_API_URL || 'http://localhost:5001/api';
-
-/** Helper: make authenticated GET request to backend */
-async function backendGet(endpoint: string): Promise<any> {
-  const token = getConfig('auth-token') as string | undefined;
-  if (!token) throw new Error('Not authenticated');
-
-  const { net } = require('electron');
-  return new Promise((resolve, reject) => {
-    const request = net.request({
-      method: 'GET',
-      url: `${BACKEND_URL}${endpoint}`,
-    });
-    request.setHeader('Authorization', `Bearer ${token}`);
-    request.setHeader('Content-Type', 'application/json');
-
-    let body = '';
-    request.on('response', (response: any) => {
-      response.on('data', (chunk: Buffer) => { body += chunk.toString(); });
-      response.on('end', () => {
-        try {
-          const data = JSON.parse(body);
-          if (response.statusCode >= 400) {
-            reject(new Error(data.message || `HTTP ${response.statusCode}`));
-          } else {
-            resolve(data);
-          }
-        } catch {
-          reject(new Error(`Invalid JSON from backend (${response.statusCode})`));
-        }
-      });
-    });
-    request.on('error', (err: Error) => reject(err));
-    request.end();
-  });
-}
-
-/** Helper: make authenticated POST request to backend */
-async function backendPost(endpoint: string, payload: Record<string, unknown> = {}): Promise<any> {
-  const token = getConfig('auth-token') as string | undefined;
-  if (!token) throw new Error('Not authenticated');
-
-  const { net } = require('electron');
-  return new Promise((resolve, reject) => {
-    const request = net.request({
-      method: 'POST',
-      url: `${BACKEND_URL}${endpoint}`,
-    });
-    request.setHeader('Authorization', `Bearer ${token}`);
-    request.setHeader('Content-Type', 'application/json');
-
-    let body = '';
-    request.on('response', (response: any) => {
-      response.on('data', (chunk: Buffer) => { body += chunk.toString(); });
-      response.on('end', () => {
-        try {
-          const data = JSON.parse(body);
-          if (response.statusCode >= 400) {
-            const err = new Error(data.message || `HTTP ${response.statusCode}`);
-            (err as any).statusCode = response.statusCode;
-            reject(err);
-          } else {
-            resolve(data);
-          }
-        } catch {
-          reject(new Error(`Invalid JSON from backend (${response.statusCode})`));
-        }
-      });
-    });
-    request.on('error', (err: Error) => reject(err));
-    const jsonBody = JSON.stringify(payload);
-    request.write(jsonBody);
-    request.end();
-  });
-}
-
-/** Helper: make unauthenticated POST request to backend (for login/register) */
-async function backendPostNoAuth(endpoint: string, payload: Record<string, unknown> = {}): Promise<any> {
-  const { net } = require('electron');
-  return new Promise((resolve, reject) => {
-    const request = net.request({
-      method: 'POST',
-      url: `${BACKEND_URL}${endpoint}`,
-    });
-    request.setHeader('Content-Type', 'application/json');
-
-    let body = '';
-    request.on('response', (response: any) => {
-      response.on('data', (chunk: Buffer) => { body += chunk.toString(); });
-      response.on('end', () => {
-        try {
-          const data = JSON.parse(body);
-          if (response.statusCode >= 400) {
-            const err = new Error(data.message || `HTTP ${response.statusCode}`);
-            (err as any).statusCode = response.statusCode;
-            reject(err);
-          } else {
-            resolve(data);
-          }
-        } catch {
-          reject(new Error(`Invalid JSON from backend (${response.statusCode})`));
-        }
-      });
-    });
-    request.on('error', (err: Error) => reject(err));
-    const jsonBody = JSON.stringify(payload);
-    request.write(jsonBody);
-    request.end();
-  });
-}
-
-/** Check if the current user is an admin (no credit restrictions) */
-function isAdmin(): boolean {
-  const role = getConfig('user-role') as string | undefined;
-  return role === 'admin';
-}
-
-/** Check if user has credits available (returns credits count, or -1 if check fails) */
-async function checkCredits(): Promise<number> {
-  // Admin users have unlimited credits
-  if (isAdmin()) return -1;
-  try {
-    const resp = await backendGet('/users/me');
-    const payload = resp.data ?? resp;
-    return payload.totalCredits ?? 0;
-  } catch {
-    return -1; // allow usage if backend is unreachable
-  }
-}
-
-/** Deduct 1 credit after a successful AI response */
-async function deductCredit(description: string): Promise<void> {
-  // Admin users don't consume credits
-  if (isAdmin()) return;
-  try {
-    await backendPost('/users/me/credits/use', { description });
-  } catch (err: any) {
-    console.error('[Credits] Failed to deduct credit:', err.message);
-  }
-}
-
 /**
  * Process audio chunk → Transcribe → Simplify
  */
 async function processAudioChunk(audioBuffer: Buffer, sessionId: string): Promise<void> {
   if (!audioBuffer || audioBuffer.length === 0) return;
   try {
-    // Check credits before processing
-    const credits = await checkCredits();
-    if (credits === 0) {
-      sendError('You have no credits remaining. Please purchase a plan to continue.', 'NO_CREDITS');
-      return;
-    }
-
     const apiKey = getApiKey();
 
     if (!apiKey) {
@@ -586,8 +436,7 @@ async function processAudioChunk(audioBuffer: Buffer, sessionId: string): Promis
           sessionId,
         });
 
-        // Deduct 1 credit after successful AI response
-        deductCredit('Desktop AI response – audio');
+        // Deducted credit tracking removed
 
         setStatus('idle');
 
@@ -619,7 +468,13 @@ export function isStealthActive(): boolean {
   return _stealthEnabled;
 }
 
+/** Check if pin (always-on-top) is currently active (used by main.ts) */
+export function isPinnedActive(): boolean {
+  return _pinnedEnabled;
+}
+
 let _stealthEnabled = false;
+let _pinnedEnabled = false;
 
 export function registerIpcHandlers(): void {
 
@@ -628,8 +483,8 @@ export function registerIpcHandlers(): void {
   userPrefs.screenshotMode = (getConfig('pref-screenshot-mode') as UserPrefs['screenshotMode']) || 'simple';
   userPrefs.customScreenshotPrompt = (getConfig('pref-screenshot-prompt') as string) || '';
   userPrefs.interviewLanguage = (getConfig('pref-interview-language') as string) || 'en';
-  userPrefs.chatModel = (getConfig('pref-chat-model') as string) || 'gpt-4o-mini';
-  userPrefs.visionModel = (getConfig('pref-vision-model') as string) || 'gpt-4o';
+  userPrefs.chatModel = (getConfig('pref-chat-model') as string) || 'gpt-5-mini';
+  userPrefs.visionModel = (getConfig('pref-vision-model') as string) || 'gpt-4o-mini';
   userPrefs.transcriptModel = (getConfig('pref-transcript-model') as string) || 'gpt-4o-mini-transcribe-2025-12-15';
   console.log('[Prefs] Loaded on startup:', userPrefs);
 
@@ -674,6 +529,11 @@ export function registerIpcHandlers(): void {
     console.log('[IPC] Received audio chunk:', buffer.length);
 
     // Queue instead of dropping — prevents crashes from overlapping calls
+    // Enforce size cap to prevent unbounded memory growth on long sessions
+    if (processingQueue.length >= MAX_QUEUE_SIZE) {
+      console.warn('[Queue] Queue full — dropping oldest chunk to prevent memory overflow');
+      processingQueue.shift();
+    }
     processingQueue.push({ buffer, sessionId: activeSessionId });
     drainQueue();
   });
@@ -691,13 +551,6 @@ export function registerIpcHandlers(): void {
     console.log('[IPC] Received voice question:', buffer.length, 'bytes');
 
     try {
-      // Check credits before processing
-      const credits = await checkCredits();
-      if (credits === 0) {
-        sendError('You have no credits remaining. Please purchase a plan to continue.', 'NO_CREDITS');
-        return;
-      }
-
       const apiKey = getApiKey();
       if (!apiKey) {
         sendError('No API key configured. Set it in Settings or .env file.', 'NO_API_KEY');
@@ -756,9 +609,6 @@ export function registerIpcHandlers(): void {
           }
           sendToRenderer('ai:response-complete', { fullText: fullResponse, sessionId });
 
-          // Deduct 1 credit after successful AI response
-          deductCredit('Desktop AI response – voice question');
-
           // Generate follow-up suggestions in background
           generateFollowUpSuggestions(question, fullResponse);
         },
@@ -786,13 +636,6 @@ export function registerIpcHandlers(): void {
     console.log('[IPC] Received text question:', trimmed.slice(0, 60) + (trimmed.length > 60 ? '...' : ''));
 
     try {
-      // Check credits before processing
-      const credits = await checkCredits();
-      if (credits === 0) {
-        sendError('You have no credits remaining. Please purchase a plan to continue.', 'NO_CREDITS');
-        return;
-      }
-
       const apiKey = getApiKey();
       if (!apiKey) {
         sendError('No API key configured. Set it in Settings or .env file.', 'NO_API_KEY');
@@ -842,9 +685,6 @@ export function registerIpcHandlers(): void {
           }
           sendToRenderer('ai:response-complete', { fullText: fullResponse, sessionId });
 
-          // Deduct 1 credit after successful AI response
-          deductCredit('Desktop AI response – text question');
-
           // Generate follow-up suggestions in background
           generateFollowUpSuggestions(trimmed, fullResponse);
         },
@@ -867,13 +707,6 @@ export function registerIpcHandlers(): void {
 
   ipcMain.on('screenshot:capture', async () => {
     try {
-      // Check credits before processing
-      const credits = await checkCredits();
-      if (credits === 0) {
-        sendError('You have no credits remaining. Please purchase a plan to continue.', 'NO_CREDITS');
-        return;
-      }
-
       const apiKey = getApiKey();
       if (!apiKey) {
         sendError('No API key configured. Set it in Settings or .env file.', 'NO_API_KEY');
@@ -954,9 +787,6 @@ export function registerIpcHandlers(): void {
             await SessionRepo.addMessage(activeSessionId, 'ai', fullResponse, responseTimestamp);
           }
           sendToRenderer('ai:response-complete', { fullText: fullResponse, sessionId });
-
-          // Deduct 1 credit after successful AI response
-          deductCredit('Desktop AI response – screenshot');
         },
         onError: (error: Error) => {
           console.log(`[Screenshot→Vision] Error after ${((Date.now() - visionStart) / 1000).toFixed(2)}s`);
@@ -976,9 +806,6 @@ export function registerIpcHandlers(): void {
   // ─── INTERVIEW CONTEXT ──────────────────────────────────────
 
   ipcMain.handle('context:set-interview', async (_event, data: { profile: string; jobDescription: string }) => {
-    meetingContext = null;
-    customContext = null;
-    conductorContext = null;
     interviewContext = {
       profile: data.profile,
       jobDescription: data.jobDescription,
@@ -996,134 +823,6 @@ export function registerIpcHandlers(): void {
     interviewContext = null;
     console.log('[IPC] Interview context cleared');
     return true;
-  });
-
-  // ─── MEETING CONTEXT ────────────────────────────────────────
-
-  ipcMain.handle('context:set-meeting', async (_event, data: { agenda: string; attendees: string }) => {
-    interviewContext = null;
-    customContext = null;
-    conductorContext = null;
-    meetingContext = {
-      agenda: data.agenda,
-      attendees: data.attendees,
-    };
-    console.log('[IPC] Meeting context set — agenda:', data.agenda.length, 'chars, attendees:', data.attendees.length, 'chars');
-    return true;
-  });
-
-  // ─── CUSTOM CONTEXT ─────────────────────────────────────────
-
-  ipcMain.handle('context:set-custom', async (_event, data: { systemPrompt: string }) => {
-    interviewContext = null;
-    meetingContext = null;
-    conductorContext = null;
-    customContext = {
-      systemPrompt: data.systemPrompt,
-    };
-    console.log('[IPC] Custom context set — prompt:', data.systemPrompt.length, 'chars');
-    return true;
-  });
-
-  // ─── CONDUCTOR CONTEXT ──────────────────────────────────────
-
-  ipcMain.handle('context:set-conductor', async (_event, data: {
-    resume: string;
-    jobDescription: string;
-    difficulty: string;
-    questionCount: number;
-    focusAreas: string;
-  }) => {
-    interviewContext = null;
-    meetingContext = null;
-    customContext = null;
-    conductorContext = {
-      resume: data.resume,
-      jobDescription: data.jobDescription,
-      difficulty: data.difficulty,
-      questionCount: data.questionCount,
-      focusAreas: data.focusAreas,
-      currentQuestion: 1,
-      totalQuestions: data.questionCount,
-    };
-    console.log('[IPC] Conductor context set — difficulty:', data.difficulty, ', questions:', data.questionCount);
-
-    // Auto-enable stealth in conductor mode
-    const win = getWindow();
-    if (win) enableStealth(win);
-
-    return true;
-  });
-
-  // ─── CONDUCTOR: GENERATE NEXT QUESTION ──────────────────────
-
-  ipcMain.on('conductor:next-question', async () => {
-    if (!conductorContext) {
-      sendError('No conductor context set.', 'CONDUCTOR_ERROR');
-      return;
-    }
-
-    try {
-      // Check credits before processing
-      const credits = await checkCredits();
-      if (credits === 0) {
-        sendError('You have no credits remaining. Please purchase a plan to continue.', 'NO_CREDITS');
-        return;
-      }
-
-      const apiKey = getApiKey();
-      if (!apiKey) {
-        sendError('No API key configured.', 'NO_API_KEY');
-        return;
-      }
-
-      setStatus('processing');
-
-      const sessionId = activeSessionId || 'conductor';
-      const history = getHistoryString(sessionId);
-      const prompt = buildConductorQuestionPrompt(conductorContext, history);
-
-      let fullResponse = '';
-      const conductorStart = Date.now();
-      let conductorFirstToken: number | null = null;
-
-      console.log(`[Conductor→GPT] Generating question #${conductorContext.currentQuestion}`);
-
-      await streamGptResponse(prompt, apiKey, {
-        onChunk: (chunk: string) => {
-          if (!conductorFirstToken) { conductorFirstToken = Date.now(); console.log(`[Conductor→GPT] First token: ${((conductorFirstToken - conductorStart) / 1000).toFixed(2)}s`); }
-          fullResponse += chunk;
-          sendToRenderer('ai:response-chunk', { chunk, sessionId });
-        },
-        onComplete: async () => {
-          console.log(`[Conductor→GPT] Total response time: ${((Date.now() - conductorStart) / 1000).toFixed(2)}s | Length: ${fullResponse.length} chars`);
-          const timestamp = new Date().toISOString();
-          addToHistory(sessionId, 'assistant', fullResponse);
-          maybeSummarize(sessionId);
-          if (activeSessionId) {
-            await SessionRepo.addMessage(activeSessionId, 'ai', `[Q${conductorContext!.currentQuestion}] ${fullResponse}`, timestamp);
-          }
-          sendToRenderer('ai:response-complete', { fullText: fullResponse, sessionId });
-
-          // Deduct 1 credit after successful AI response
-          deductCredit('Desktop AI response – conductor');
-
-          // Advance question counter
-          conductorContext!.currentQuestion++;
-        },
-        onError: (error: Error) => {
-          console.log(`[Conductor→GPT] Error after ${((Date.now() - conductorStart) / 1000).toFixed(2)}s`);
-          sendError(`GPT Error: ${error.message}`, 'GPT_ERROR');
-        },
-      }, userPrefs.chatModel);
-
-      setStatus(activeSessionId ? 'listening' : 'idle');
-
-    } catch (err: any) {
-      console.error('[Conductor] Error generating question:', err);
-      sendError(err.message || 'Failed to generate question', 'CONDUCTOR_ERROR');
-      setStatus(activeSessionId ? 'listening' : 'idle');
-    }
   });
 
   // ─── AUDIO STOP ─────────────────────────────────────────────
@@ -1237,7 +936,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('settings:load-model-prefs', async () => {
     return {
       chatModel: (getConfig('pref-chat-model') as string) || 'gpt-4o-mini',
-      visionModel: (getConfig('pref-vision-model') as string) || 'gpt-4o',
+      visionModel: (getConfig('pref-vision-model') as string) || 'gpt-4o-mini',
       transcriptModel: (getConfig('pref-transcript-model') as string) || 'gpt-4o-mini-transcribe-2025-12-15',
     };
   });
@@ -1275,13 +974,61 @@ export function registerIpcHandlers(): void {
 
   // ─── WINDOW CONTROLS ────────────────────────────────────────
 
+  // Persistent event handlers for pin mode — re-apply all pin
+  // properties after show/restore so Windows never drops them.
+  let pinShowHandler: (() => void) | null = null;
+  let pinRestoreHandler: (() => void) | null = null;
+
+  /**
+   * Apply all pin-mode window properties in one shot.
+   * Called on enable AND every show/restore so that
+   * setContentProtection cannot be silently dropped by the OS.
+   */
+  function applyPinProps(win: BrowserWindow) {
+    if (!win || win.isDestroyed()) return;
+    win.setAlwaysOnTop(true, 'screen-saver');
+    win.setContentProtection(true);
+    // Pin keeps the window in taskbar & Alt+Tab — only stealth hides it
+  }
+
+  function removePinProps(win: BrowserWindow) {
+    if (!win || win.isDestroyed()) return;
+    win.setAlwaysOnTop(false);
+    win.setContentProtection(false);
+  }
+
   ipcMain.handle('window:toggle-aot', async () => {
     const win = getWindow();
     if (win) {
-      const current = win.isAlwaysOnTop();
-      // Use 'screen-saver' level so the window stays above ALL other apps
-      win.setAlwaysOnTop(!current, 'screen-saver');
-      return !current;
+      _pinnedEnabled = !_pinnedEnabled;
+
+      if (_pinnedEnabled) {
+        // Apply immediately (safe even when stealth is active — subset of stealth props)
+        applyPinProps(win);
+
+        // Persist across show/restore cycles (Windows can lose these props)
+        pinShowHandler = () => {
+          if (_pinnedEnabled && win && !win.isDestroyed()) {
+            applyPinProps(win);
+          }
+        };
+        pinRestoreHandler = () => {
+          if (_pinnedEnabled && win && !win.isDestroyed()) {
+            applyPinProps(win);
+          }
+        };
+        win.on('show', pinShowHandler);
+        win.on('restore', pinRestoreHandler);
+      } else {
+        // Remove handlers
+        if (pinShowHandler)    { win.removeListener('show', pinShowHandler);       pinShowHandler = null; }
+        if (pinRestoreHandler) { win.removeListener('restore', pinRestoreHandler); pinRestoreHandler = null; }
+
+        // Only strip props if stealth isn't also active (stealth manages its own)
+        if (!_stealthEnabled) removePinProps(win);
+      }
+
+      return _pinnedEnabled;
     }
     return false;
   });
@@ -1310,16 +1057,24 @@ export function registerIpcHandlers(): void {
   let showHandler: (() => void) | null = null;
   let restoreHandler: (() => void) | null = null;
 
+  let blurTimeout: ReturnType<typeof setTimeout> | null = null;
+
   function enableStealth(win: BrowserWindow) {
     if (getStealthEnabled()) return; // already on
     setStealthEnabled(true);
     applyStealthProps(win);
 
     // Auto-hide when window loses focus → vanishes from Alt+Tab
+    // Use a 300ms delay so that native dialogs / context menus
+    // don't cause instant permanent hide (common cause of "stealth not working").
+    // IMPORTANT: If pin mode is active, do NOT hide — the user wants it always visible.
     blurHandler = () => {
-      if (getStealthEnabled() && win && !win.isDestroyed()) {
-        win.hide();
-      }
+      if (blurTimeout) clearTimeout(blurTimeout);
+      blurTimeout = setTimeout(() => {
+        if (getStealthEnabled() && !_pinnedEnabled && win && !win.isDestroyed() && !win.isFocused()) {
+          win.hide();
+        }
+      }, 300);
     };
     win.on('blur', blurHandler);
 
@@ -1346,9 +1101,20 @@ export function registerIpcHandlers(): void {
   function disableStealth(win: BrowserWindow) {
     if (!getStealthEnabled()) return;
     setStealthEnabled(false);
-    win.setContentProtection(false);
-    win.setSkipTaskbar(false);
-    win.setTitle('Meetvora');
+    if (blurTimeout) { clearTimeout(blurTimeout); blurTimeout = null; }
+
+    // When pin is still active, preserve contentProtection/skipTaskbar/alwaysOnTop
+    // Only strip them if user hasn't pinned the window.
+    if (_pinnedEnabled) {
+      // Transition from stealth to pin: restore taskbar/title, keep alwaysOnTop + contentProtection
+      applyPinProps(win);
+      win.setSkipTaskbar(false);
+      win.setTitle('Meetvora');
+    } else {
+      removePinProps(win);
+      win.setSkipTaskbar(false);
+      win.setTitle('Meetvora');
+    }
 
     if (blurHandler) {
       win.removeListener('blur', blurHandler);
@@ -1364,7 +1130,7 @@ export function registerIpcHandlers(): void {
     }
 
     win.webContents.send('stealth:changed', false);
-    console.log('[IPC] Stealth mode: OFF');
+    console.log('[IPC] Stealth mode: OFF (pin still active:', _pinnedEnabled, ')');
   }
 
   ipcMain.handle('window:toggle-stealth', async () => {
@@ -1383,9 +1149,12 @@ export function registerIpcHandlers(): void {
   ipcMain.on('window:minimize', () => {
     const win = getWindow();
     if (!win) return;
-    // In stealth mode, hide instead of minimize — minimize shows in taskbar
-    // and can break content protection on restore
-    if (getStealthEnabled()) {
+    // Pin mode: always minimize normally (user wants window to stay accessible)
+    if (_pinnedEnabled) {
+      win.minimize();
+    } else if (getStealthEnabled()) {
+      // Stealth-only: hide instead of minimize (stealth skips taskbar,
+      // so a normal minimize would leave the window unreachable).
       win.hide();
     } else {
       win.minimize();
@@ -1398,6 +1167,9 @@ export function registerIpcHandlers(): void {
 
   // ─── WINDOW POSITIONING (F/R/L/C shortcuts) ─────────────────
 
+  let savedBounds: Electron.Rectangle | null = null;
+  let isFullscreen = false;
+
   ipcMain.on('window:position', (_event, position: string) => {
     const win = getWindow();
     if (!win) return;
@@ -1409,11 +1181,14 @@ export function registerIpcHandlers(): void {
 
     switch (position) {
       case 'fullscreen': {
-        // Toggle maximized / restore
-        if (win.isMaximized()) {
-          win.unmaximize();
+        if (isFullscreen && savedBounds) {
+          win.setBounds(savedBounds);
+          isFullscreen = false;
+          savedBounds = null;
         } else {
-          win.maximize();
+          savedBounds = win.getBounds();
+          win.setBounds({ x: 0, y: 0, width: sw, height: sh });
+          isFullscreen = true;
         }
         break;
       }
@@ -1447,10 +1222,24 @@ export function registerIpcHandlers(): void {
   ipcMain.on('window:toggle-visibility', () => {
     const win = getWindow();
     if (!win) return;
-    if (win.isVisible()) {
+    // A minimized window has isVisible()===true on Windows, so check both
+    const accessible = win.isVisible() && !win.isMinimized();
+    if (accessible) {
       win.hide();
     } else {
+      if (win.isMinimized()) win.restore();
       win.show();
+      // Re-apply stealth props if active (can be lost after minimize/restore)
+      if (_stealthEnabled) {
+        win.setContentProtection(true);
+        win.setSkipTaskbar(true);
+        win.setTitle(' ');
+        win.setAlwaysOnTop(true, 'screen-saver');
+      } else if (_pinnedEnabled) {
+        // Re-apply pin props (Windows can lose them after restore)
+        win.setContentProtection(true);
+        win.setAlwaysOnTop(true, 'screen-saver');
+      }
       win.focus();
     }
   });
@@ -1465,104 +1254,6 @@ export function registerIpcHandlers(): void {
       }
     } catch {
       console.warn('[IPC] Blocked invalid URL for openExternal:', url);
-    }
-  });
-
-  // ─── AUTH ──────────────────────────────────────────────────
-
-  ipcMain.handle('auth:get-user', async () => {
-    const email = getConfig('user-email') as string | undefined;
-    if (!email) return null;
-    const name = (getConfig('user-name') as string) || '';
-    const role = (getConfig('user-role') as string) || 'admin';
-    return { email, name, role };
-  });
-
-  ipcMain.handle('auth:sign-out', async () => {
-    setConfig('auth-token', '');
-    setConfig('user-email', '');
-    setConfig('user-name', '');
-    setConfig('user-role', '');
-    setConfig('offline-mode', '');
-    console.log('[Auth] Signed out');
-  });
-
-  // [OFFLINE_MODE] — Continue without backend authentication.
-  // Stores a local-only user with admin role (no credit restrictions).
-  ipcMain.handle('auth:continue-offline', async () => {
-    setConfig('auth-token', '');
-    setConfig('user-email', 'offline@meetvora.local');
-    setConfig('user-name', 'Offline User');
-    setConfig('user-role', 'admin');
-    setConfig('offline-mode', 'true');
-    console.log('[Auth] Continuing in offline mode');
-    return { success: true, user: { email: 'offline@meetvora.local', name: 'Offline User', role: 'admin' } };
-  });
-
-  ipcMain.handle('auth:login', async (_event, data: { email: string; password: string }) => {
-    try {
-      const resp = await backendPostNoAuth('/auth/login', { email: data.email, password: data.password });
-      const payload = resp.data ?? resp;
-      const user = payload.user;
-      const token = payload.accessToken;
-      if (!token) throw new Error('No access token received');
-      setConfig('auth-token', token);
-      setConfig('user-email', user?.email || data.email);
-      setConfig('user-name', user?.name || '');
-      setConfig('user-role', user?.role || 'admin');
-      console.log('[Auth] Login successful:', user?.email, 'role:', user?.role);
-      return { success: true, user: { email: user?.email || data.email, name: user?.name || '', role: user?.role || 'admin' } };
-    } catch (err: any) {
-      console.error('[Auth] Login failed:', err.message);
-      return { success: false, error: err.message };
-    }
-  });
-
-  ipcMain.handle('auth:register', async (_event, data: { name: string; email: string; password: string }) => {
-    try {
-      const resp = await backendPostNoAuth('/auth/register', { name: data.name, email: data.email, password: data.password });
-      const payload = resp.data ?? resp;
-      const user = payload.user;
-      const token = payload.accessToken;
-      if (!token) throw new Error('No access token received');
-      setConfig('auth-token', token);
-      setConfig('user-email', user?.email || data.email);
-      setConfig('user-name', user?.name || data.name);
-      setConfig('user-role', user?.role || 'admin');
-      console.log('[Auth] Registration successful:', user?.email, 'role:', user?.role);
-      return { success: true, user: { email: user?.email || data.email, name: user?.name || data.name, role: user?.role || 'admin' } };
-    } catch (err: any) {
-      console.error('[Auth] Registration failed:', err.message);
-      return { success: false, error: err.message };
-    }
-  });
-
-  // ─── USER PROFILE & CREDITS (Backend API) ─────────────────
-
-  ipcMain.handle('user:get-profile', async () => {
-    try {
-      const resp = await backendGet('/users/me');
-      const payload = resp.data ?? resp;
-      return {
-        success: true,
-        user: payload.user,
-        subscription: payload.subscription || null,
-        totalCredits: payload.totalCredits ?? 0,
-      };
-    } catch (err: any) {
-      console.error('[IPC] Failed to fetch user profile:', err.message);
-      return { success: false, error: err.message };
-    }
-  });
-
-  ipcMain.handle('user:get-credits', async () => {
-    try {
-      const resp = await backendGet('/users/me');
-      const payload = resp.data ?? resp;
-      return { success: true, credits: payload.totalCredits ?? 0 };
-    } catch (err: any) {
-      console.error('[IPC] Failed to fetch credits:', err.message);
-      return { success: false, credits: 0, error: err.message };
     }
   });
 

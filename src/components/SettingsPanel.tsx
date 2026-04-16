@@ -22,9 +22,7 @@ import {
 
 interface SettingsPanelProps {
   onClose: () => void;
-  onSignOut: () => void;
   onViewHistory: () => void;
-  credits?: number;
 }
 
 type Tab = 'general' | 'audio' | 'shortcuts' | 'appearance';
@@ -65,7 +63,7 @@ const Toggle: React.FC<{ checked: boolean; onChange: (v: boolean) => void; label
   <button
     onClick={() => onChange(!checked)}
     aria-label={label ?? (checked ? 'Disable' : 'Enable')}
-    aria-pressed={checked ? 'true' : 'false'}
+    aria-pressed={checked}
     className={`sp-toggle relative inline-flex h-5 w-9 shrink-0 rounded-full${checked ? ' sp-toggle--on' : ''}`}
   >
     <span className={`sp-toggle-knob absolute top-0.5 h-4 w-4 rounded-full${checked ? ' sp-toggle-knob--on' : ' sp-toggle-knob--off'}`} />
@@ -203,9 +201,7 @@ const SHORTCUTS = [
 
 const SettingsPanel: React.FC<SettingsPanelProps> = ({
   onClose,
-  onSignOut,
   onViewHistory,
-  credits,
 }) => {
   const { settings, update } = useSettings();
   const [activeTab, setActiveTab] = useState<Tab>('general');
@@ -239,8 +235,8 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
   };
 
   /* ── Model preferences ── */
-  const [chatModel, setChatModel] = useState('gpt-4o-mini');
-  const [visionModel, setVisionModel] = useState('gpt-4o');
+  const [chatModel, setChatModel] = useState('gpt-5-mini');
+  const [visionModel, setVisionModel] = useState('gpt-4o-mini');
   const [transcriptModel, setTranscriptModel] = useState('gpt-4o-mini-transcribe-2025-12-15');
 
   useEffect(() => {
@@ -325,9 +321,6 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <h2 className="sp-header-title">{tabTitle[activeTab]}</h2>
-              {credits !== undefined && (
-                <span className="sp-credits-badge">{credits} credits</span>
-              )}
             </div>
             <p className="sp-header-desc">{tabDesc[activeTab]}</p>
           </div>
@@ -349,6 +342,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
+            role="tab"
             aria-label={tab.charAt(0).toUpperCase() + tab.slice(1)}
             aria-selected={activeTab === tab}
             className={`sp-tab-btn flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg capitalize${activeTab === tab ? ' sp-tab-btn--active' : ''}`}
@@ -387,9 +381,8 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   onChange={e => setApiKey(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') handleSaveApiKey(); }}
                   placeholder={apiKeyHasExisting ? 'sk-… (enter new key to replace)' : 'sk-…'}
-                  className="sp-textarea flex-1"
+                  className="sp-textarea sp-api-input flex-1"
                   aria-label="OpenAI API key input"
-                  style={{ resize: 'none', height: 'auto', padding: '6px 10px' }}
                 />
                 <button
                   onClick={() => setShowApiKey(v => !v)}
@@ -423,10 +416,12 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 value={chatModel}
                 onChange={v => handleModelChange('chatModel', v)}
                 options={[
+                  { value: 'gpt-5-mini', label: 'GPT-5 Mini (recommended)' },
+                  { value: 'gpt-5-pro', label: 'GPT-5 Pro' },
                   { value: 'gpt-4o-mini', label: 'GPT-4o Mini (fast)' },
-                  { value: 'gpt-4o', label: 'GPT-4o (smart)' },
-                  { value: 'gpt-4.1-mini', label: 'GPT-4.1 Mini' },
+                  { value: 'gpt-4o', label: 'GPT-4o' },
                   { value: 'gpt-4.1', label: 'GPT-4.1' },
+                  { value: 'gpt-4.1-mini', label: 'GPT-4.1 Mini' },
                 ]}
                 label="Chat Model"
               />
@@ -441,8 +436,8 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 value={visionModel}
                 onChange={v => handleModelChange('visionModel', v)}
                 options={[
-                  { value: 'gpt-4o-mini', label: 'GPT-4o Mini (fast)' },
                   { value: 'gpt-4o', label: 'GPT-4o (best quality)' },
+                  { value: 'gpt-4o-mini', label: 'GPT-4o Mini (fast)' },
                   { value: 'gpt-4.1', label: 'GPT-4.1' },
                 ]}
                 label="Vision Model"
@@ -539,24 +534,6 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 </svg>
                 View History
               </button>
-              <button
-                onClick={onSignOut}
-                className="sp-btn-signout flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all"
-              >
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                  <polyline points="16 17 21 12 16 7" />
-                  <line x1="21" y1="12" x2="9" y2="12" />
-                </svg>
-                Logout
-              </button>
-            </div>
-
-            {/* Credit cost info */}
-            <div className="flex items-center gap-2 pt-2 pb-1 flex-wrap">
-              <span className="sp-credit-indigo text-[10px] px-2.5 py-1 rounded-full font-medium">Text Chat: 1 credit</span>
-              <span className="sp-credit-violet text-[10px] px-2.5 py-1 rounded-full font-medium">Voice: 2 credits</span>
-              <span className="sp-credit-cyan   text-[10px] px-2.5 py-1 rounded-full font-medium">Screenshot: 4 credits</span>
             </div>
           </div>
         )}
@@ -730,10 +707,9 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   value={settings.transparencyLevel}
                   onChange={e => update('transparencyLevel', parseInt(e.target.value))}
                   aria-label="Window opacity"
-                  className="w-full h-1.5 rounded-full appearance-none"
-                  style={{
-                    background: `linear-gradient(to right, #6366f1 ${settings.transparencyLevel}%, var(--glass-border-strong) ${settings.transparencyLevel}%)`,
-                  }}
+                  className="sp-range-slider w-full"
+                  /* stylelint-disable-next-line */
+                  ref={el => { if (el) el.style.setProperty('--range-pct', `${settings.transparencyLevel}%`); }}
                 />
                 <div className="flex justify-between mt-1">
                   <span className="sp-opacity-hint">10% (nearly transparent)</span>

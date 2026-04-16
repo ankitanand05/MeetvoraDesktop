@@ -55,7 +55,6 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onComplete, onBack, onMinimiz
               onClick={onBack}
               className="titlebar-no-drag w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
               style={{ background: 'var(--glass-bg-subtle)', color: 'var(--text-muted)' }}
-              title="Back to mode selection"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="15 18 9 12 15 6" />
@@ -85,7 +84,6 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onComplete, onBack, onMinimiz
               background: isDark ? 'rgba(250,204,21,0.15)' : 'rgba(99,102,241,0.10)',
               color: isDark ? '#facc15' : '#6366f1',
             }}
-            title={isDark ? 'Switch to Light mode' : 'Switch to Dark mode'}
           >
             {isDark ? (
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -101,12 +99,12 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onComplete, onBack, onMinimiz
               </svg>
             )}
           </button>
-          <button onClick={onMinimize} className="p-1.5 rounded-md transition-colors" style={{ color: 'var(--text-muted)' }} title="Minimize">
+          <button onClick={onMinimize} className="p-1.5 rounded-md transition-colors" style={{ color: 'var(--text-muted)' }}>
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
               <rect x="2" y="5.5" width="8" height="1" rx="0.5" fill="currentColor" />
             </svg>
           </button>
-          <button onClick={onClose} className="p-1.5 rounded-md transition-colors" style={{ color: 'var(--text-muted)' }} title="Close">
+          <button onClick={onClose} className="p-1.5 rounded-md transition-colors" style={{ color: 'var(--text-muted)' }}>
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
               <path d="M3 3L9 9M9 3L3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
             </svg>

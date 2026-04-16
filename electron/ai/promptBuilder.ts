@@ -108,7 +108,7 @@ export function buildMeetingPrompt(transcript: string): PromptPair {
   return {
     instructions: MEETING_INSTRUCTIONS,
     input: `Meeting transcript snippet:\n\n"${cleaned}"\n\nExplain simply.`,
-    maxCompletionTokens: 220,
+    maxCompletionTokens: 500,
     reasoningEffort: 'low',
     promptTag: 'meeting-default',
   };
@@ -151,7 +151,7 @@ export function buildConversationPrompt(question: string, history: string = ''):
   return {
     instructions: CONVERSATION_INSTRUCTIONS,
     input: `${historyBlock}${cleaned}`,
-    maxCompletionTokens: 320,
+    maxCompletionTokens: 800,
     reasoningEffort: 'low',
     promptTag: 'conversation-default',
   };
@@ -207,7 +207,7 @@ RULES:
 • Never start "I am a [job title]...". Open with what you do or care about.
 • Never say "As an AI". Never use filler like "Great question". Never break character.`,
       input: `Write the spoken "tell me about yourself" answer:`,
-      maxCompletionTokens: 520,
+      maxCompletionTokens: 700,
       reasoningEffort: 'medium',
       promptTag: 'interview-intro',
     };
@@ -237,7 +237,7 @@ Rules:
   return {
     instructions,
     input: `${historyBlock}Interviewer just asked:\n\n"${cleaned}"\n\nGive the candidate's perfect interview answer:`,
-    maxCompletionTokens: 420,
+    maxCompletionTokens: 800,
     reasoningEffort: 'low',
     promptTag: 'interview-default',
   };
@@ -420,7 +420,7 @@ BEHAVIOR RULES:
     input: trimmedHistory
       ? `Previous discussion:\n${trimmedHistory}\n\nNew transcript snippet:\n\n"${cleaned}"\n\nAnalyze and respond as a senior consultant.`
       : `Meeting transcript snippet:\n\n"${cleaned}"\n\nAnalyze and respond as a senior consultant.`,
-    maxCompletionTokens: 480,
+    maxCompletionTokens: 1200,
     reasoningEffort: 'low',
     promptTag: 'meeting-assistant-default',
   };
@@ -476,7 +476,7 @@ export function buildCustomPrompt(
   return {
     instructions: systemPrompt,
     input: `${historyBlock}${cleaned}`,
-    maxCompletionTokens: 320,
+    maxCompletionTokens: 800,
     reasoningEffort: 'low',
     promptTag: 'custom-default',
   };

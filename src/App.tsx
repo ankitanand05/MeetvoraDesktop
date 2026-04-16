@@ -2,13 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import Header from './components/Header';
 import ChatPanel from './components/ChatPanel';
 import Controls from './components/Controls';
-import ModeSelectScreen, { AppMode } from './components/ModeSelectScreen';
 import SetupScreen from './components/SetupScreen';
-import MeetingSetupScreen from './components/MeetingSetupScreen';
-import CustomSetupScreen from './components/CustomSetupScreen';
-import ConductorSetupScreen from './components/ConductorSetupScreen';
-import WelcomeScreen from './components/WelcomeScreen';
-import DashboardScreen from './components/DashboardScreen';
 import SettingsPanel from './components/SettingsPanel';
 import { useSession } from './hooks/useSession';
 import { useIPC } from './hooks/useIPC';
@@ -22,47 +16,14 @@ const AppInner: React.FC = () => {
   const { isDark } = useTheme();
   const { settings } = useSettings();
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
-  const [screen, setScreen] = useState<'welcome' | 'dashboard' | 'mode-select' | 'setup' | 'main'>('welcome');
-  const [selectedMode, setSelectedMode] = useState<AppMode | null>(null);
+  const [screen, setScreen] = useState<'setup' | 'main'>('setup');
   const [isStealth, setIsStealth] = useState(false);
   const [showTextInput, setShowTextInput] = useState(false);
   const [isTeleprompter, setIsTeleprompter] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [user, setUser] = useState<{ email: string; name: string; role: string } | null>(null);
 
   // Wire up IPC event listeners
   useIPC(session, setIsStealth);
-
-  // On mount, validate token with backend. If valid → dashboard, else → welcome
-  // [OFFLINE_MODE] — If user is offline, skip backend validation and go to dashboard
-  useEffect(() => {
-    const checkUser = async () => {
-      try {
-        const u = await window.electronAPI.getUser();
-        if (!u) return; // no stored user, stay on welcome
-
-        // [OFFLINE_MODE] — Skip backend validation for offline user
-        if (u.email === 'offline@meetvora.local') {
-          setUser(u);
-          setScreen('dashboard');
-          return;
-        }
-
-        // Validate token is still valid by calling backend
-        const profile = await window.electronAPI.getUserProfile();
-        if (profile.success) {
-          setUser(u);
-          setScreen('dashboard');
-        } else {
-          // Token expired/invalid — clear stale auth
-          await window.electronAPI.signOut();
-        }
-      } catch {
-        // not signed in or backend unreachable — stay on welcome
-      }
-    };
-    checkUser();
-  }, []);
 
   // Check API key on mount
   useEffect(() => {
@@ -93,57 +54,13 @@ const AppInner: React.FC = () => {
     }
   }, [settings.seeThrough, settings.transparencyLevel, isDark]);
 
-  /** Mode selection */
-  const handleModeSelect = (mode: AppMode) => {
-    setSelectedMode(mode);
-    setScreen('setup');
-  };
-
-  /** Back to mode selection */
-  const handleBackToModes = () => {
-    setSelectedMode(null);
-    setScreen('mode-select');
-  };
-
-  /** Interview setup complete */
+  /** Interview setup complete — enter session (no going back) */
   const handleInterviewSetupComplete = async (profile: string, jobDescription: string) => {
     try {
       await window.electronAPI.setInterviewContext({ profile, jobDescription });
       setScreen('main');
     } catch (err) {
       console.error('Failed to set interview context:', err);
-    }
-  };
-
-  /** Meeting setup complete */
-  const handleMeetingSetupComplete = async (agenda: string, attendees: string) => {
-    try {
-      await window.electronAPI.setMeetingContext({ agenda, attendees });
-      setScreen('main');
-    } catch (err) {
-      console.error('Failed to set meeting context:', err);
-    }
-  };
-
-  /** Custom setup complete */
-  const handleCustomSetupComplete = async (systemPrompt: string) => {
-    try {
-      await window.electronAPI.setCustomContext({ systemPrompt });
-      setScreen('main');
-    } catch (err) {
-      console.error('Failed to set custom context:', err);
-    }
-  };
-
-  /** Conductor setup complete */
-  const handleConductorSetupComplete = async (resume: string, jobDescription: string, difficulty: string, questionCount: number, focusAreas: string) => {
-    try {
-      await window.electronAPI.setConductorContext({ resume, jobDescription, difficulty, questionCount, focusAreas });
-      setScreen('main');
-      // Automatically generate the first interview question
-      setTimeout(() => window.electronAPI.conductorNextQuestion(), 500);
-    } catch (err) {
-      console.error('Failed to set conductor context:', err);
     }
   };
 
@@ -287,119 +204,18 @@ const AppInner: React.FC = () => {
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [screen, session.status, session.suggestions, settings.spacebarMode]);
+  }, [screen, session.status, session.suggestions, settings.spacebarMode, showSettings, session.isAlwaysOnTop]);
 
-  const MEETVORA_URL = 'http://localhost:5173';
-
-  const handleBuyCredits = () => {
-    window.electronAPI.openExternal(`${MEETVORA_URL}/pricing`).catch(() => {});
-  };
-
-  const handleSignOut = async () => {
-    await window.electronAPI.signOut();
-    setUser(null);
-    setScreen('welcome');
-  };
-
-  // Navigate to dashboard after auth (fetches user from main process)
-  const goToDashboard = async (authUser?: { email: string; name: string; role: string }) => {
-    if (authUser) {
-      setUser(authUser);
-    } else {
-      try {
-        const u = await window.electronAPI.getUser();
-        if (u) setUser(u);
-      } catch { /* ignore */ }
-    }
-    setScreen('dashboard');
-  };
-
-  // ── Welcome screen ──
-  if (screen === 'welcome') {
-    return (
-      <WelcomeScreen
-        onContinue={goToDashboard}
-        onMinimize={minHandler}
-        onClose={closeHandler}
-        user={user}
-      />
-    );
-  }
-
-  // ── Dashboard screen (after login, before mode select) ──
-  if (screen === 'dashboard') {
-    if (!user) {
-      setScreen('welcome');
-      return null;
-    }
-    return (
-      <DashboardScreen
-        onContinue={() => setScreen('mode-select')}
-        onBuyCredits={handleBuyCredits}
-        onSignOut={handleSignOut}
-        onAuthExpired={handleSignOut}
-        onBack={handleSignOut}
-        onMinimize={minHandler}
-        onClose={closeHandler}
-        user={user}
-      />
-    );
-  }
-
-  // ── Mode selection screen ──
-  if (screen === 'mode-select') {
-    return (
-      <ModeSelectScreen
-        onSelect={handleModeSelect}
-        onBack={() => setScreen('dashboard')}
-        onMinimize={minHandler}
-        onClose={closeHandler}
-      />
-    );
-  }
-
-  // ── Setup screens per mode ──
+  // ── Setup screen (interview only — once entered session, no going back) ──
   if (screen === 'setup') {
-    if (selectedMode === 'interview') {
-      return (
-        <SetupScreen
-          onComplete={handleInterviewSetupComplete}
-          onBack={handleBackToModes}
-          onMinimize={minHandler}
-          onClose={closeHandler}
-        />
-      );
-    }
-    if (selectedMode === 'meeting') {
-      return (
-        <MeetingSetupScreen
-          onComplete={handleMeetingSetupComplete}
-          onBack={handleBackToModes}
-          onMinimize={minHandler}
-          onClose={closeHandler}
-        />
-      );
-    }
-    if (selectedMode === 'custom') {
-      return (
-        <CustomSetupScreen
-          onComplete={handleCustomSetupComplete}
-          onBack={handleBackToModes}
-          onMinimize={minHandler}
-          onClose={closeHandler}
-        />
-      );
-    }
-    if (selectedMode === 'conductor') {
-      return (
-        <ConductorSetupScreen
-          onComplete={handleConductorSetupComplete}
-          onBack={handleBackToModes}
-          onMinimize={minHandler}
-          onClose={closeHandler}
-        />
-      );
-    }
+    return (
+      <SetupScreen
+        onComplete={handleInterviewSetupComplete}
+        onBack={minHandler}
+        onMinimize={minHandler}
+        onClose={closeHandler}
+      />
+    );
   }
 
   // ── Main copilot view ──
@@ -413,14 +229,13 @@ const AppInner: React.FC = () => {
         borderColor: 'var(--glass-border)',
       }}
     >
-      {/* Custom titlebar */}
+      {/* Custom titlebar — no back button during active session */}
       <Header
         status={session.status}
         isAlwaysOnTop={session.isAlwaysOnTop}
         isStealth={isStealth}
         onToggleAlwaysOnTop={session.toggleAlwaysOnTop}
         onToggleStealth={handleToggleStealth}
-        onBack={() => { setSelectedMode(null); setScreen('dashboard'); }}
         onMinimize={() => window.electronAPI.minimizeWindow()}
         onClose={() => window.electronAPI.closeWindow()}
       />
@@ -473,7 +288,6 @@ const AppInner: React.FC = () => {
       {showSettings && (
         <SettingsPanel
           onClose={() => setShowSettings(false)}
-          onSignOut={handleSignOut}
           onViewHistory={() => {}}
         />
       )}

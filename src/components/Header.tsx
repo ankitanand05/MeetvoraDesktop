@@ -12,7 +12,7 @@ interface HeaderProps {
   isStealth: boolean;
   onToggleAlwaysOnTop: () => void;
   onToggleStealth: () => void;
-  onBack: () => void;
+  onBack?: () => void;
   onMinimize: () => void;
   onClose: () => void;
 }
@@ -95,18 +95,20 @@ const Header: React.FC<HeaderProps> = ({
     >
       {/* Left: App branding */}
       <div className="titlebar-no-drag flex items-center gap-2">
+        {onBack && (
         <button
           onClick={onBack}
           className="p-1.5 rounded-md transition-all duration-200"
           style={{ color: 'var(--text-muted)' }}
           onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface-hover)'; e.currentTarget.style.color = 'var(--text-primary)'; }}
           onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-muted)'; }}
-          title="Back to dashboard"
+          aria-label="Back"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="15 18 9 12 15 6" />
           </svg>
         </button>
+        )}
         <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
@@ -133,7 +135,7 @@ const Header: React.FC<HeaderProps> = ({
             background: isDark ? 'rgba(250,204,21,0.15)' : 'rgba(99,102,241,0.10)',
             color: isDark ? '#facc15' : '#6366f1',
           }}
-          title={isDark ? 'Switch to Light mode' : 'Switch to Dark mode'}
+          aria-label="Toggle theme"
         >
           {isDark ? (
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -161,7 +163,7 @@ const Header: React.FC<HeaderProps> = ({
             background: isAlwaysOnTop ? (isDark ? 'rgba(6,182,212,0.2)' : 'rgba(6,182,212,0.12)') : 'transparent',
             color: isAlwaysOnTop ? '#06b6d4' : 'var(--text-muted)',
           }}
-          title={isAlwaysOnTop ? 'Unpin (Ctrl+Shift+A)' : 'Pin on top (Ctrl+Shift+A)'}
+          aria-label="Pin"
         >
           <svg width="12" height="12" viewBox="0 0 24 24" fill={isAlwaysOnTop ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 17v5" /><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
@@ -174,7 +176,7 @@ const Header: React.FC<HeaderProps> = ({
             background: isStealth ? (isDark ? 'rgba(139,92,246,0.2)' : 'rgba(139,92,246,0.12)') : 'transparent',
             color: isStealth ? '#8b5cf6' : 'var(--text-muted)',
           }}
-          title={isStealth ? 'Visible to screen share (Ctrl+Shift+H)' : 'Hide from screen share (Ctrl+Shift+H)'}
+          aria-label="Stealth"
         >
           {isStealth ? (
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -199,7 +201,7 @@ const Header: React.FC<HeaderProps> = ({
             background: showShortcuts ? (isDark ? 'rgba(245,158,11,0.2)' : 'rgba(254,243,199,1)') : 'transparent',
             color: showShortcuts ? '#f59e0b' : 'var(--text-muted)',
           }}
-          title="Keyboard shortcuts"
+          aria-label="Keyboard shortcuts"
         >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <rect x="2" y="4" width="20" height="16" rx="2" />
@@ -213,7 +215,7 @@ const Header: React.FC<HeaderProps> = ({
           style={{ color: 'var(--text-muted)' }}
           onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface-hover)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
           onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-muted)'; }}
-          title="Minimize"
+          aria-label="Minimize"
         >
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
             <rect x="2" y="5.5" width="8" height="1" rx="0.5" fill="currentColor" />
@@ -225,7 +227,7 @@ const Header: React.FC<HeaderProps> = ({
           style={{ color: 'var(--text-muted)' }}
           onMouseEnter={e => { e.currentTarget.style.color = '#ef4444'; e.currentTarget.style.background = isDark ? 'rgba(239,68,68,0.15)' : 'rgba(254,226,226,1)'; }}
           onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.background = 'transparent'; }}
-          title="Close"
+          aria-label="Close"
         >
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
             <path d="M3 3L9 9M9 3L3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -251,7 +253,7 @@ const Header: React.FC<HeaderProps> = ({
             onClick={() => setShowShortcuts(false)}
             className="p-0.5 rounded transition-colors"
             style={{ color: 'var(--text-muted)' }}
-            title="Close shortcuts"
+            aria-label="Close shortcuts"
           >
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
               <path d="M3 3L9 9M9 3L3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />

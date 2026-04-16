@@ -22,10 +22,6 @@ interface ElectronAPI {
   captureScreenshot: () => void;
   setInterviewContext: (data: { profile: string; jobDescription: string }) => Promise<boolean>;
   clearInterviewContext: () => Promise<boolean>;
-  setMeetingContext: (data: { agenda: string; attendees: string }) => Promise<boolean>;
-  setCustomContext: (data: { systemPrompt: string }) => Promise<boolean>;
-  setConductorContext: (data: { resume: string; jobDescription: string; difficulty: string; questionCount: number; focusAreas: string }) => Promise<boolean>;
-  conductorNextQuestion: () => void;
 
   // Session management
   createSession: () => Promise<string>;
@@ -58,17 +54,6 @@ interface ElectronAPI {
     customScreenshotPrompt: string;
     interviewLanguage: string;
   }>;
-
-  // Auth
-  getUser: () => Promise<{ email: string; name: string; role: string } | null>;
-  signOut: () => Promise<void>;
-  // [OFFLINE_MODE] — Remove when backend is hosted.
-  continueOffline: () => Promise<{ success: boolean; user: { email: string; name: string; role: string } }>;
-  login: (email: string, password: string) => Promise<{ success: boolean; user?: { email: string; name: string; role: string }; error?: string }>;
-  register: (name: string, email: string, password: string) => Promise<{ success: boolean; user?: { email: string; name: string; role: string }; error?: string }>;
-  getUserProfile: () => Promise<{ success: boolean; user?: any; subscription?: any; totalCredits?: number; error?: string }>;
-  getCredits: () => Promise<{ success: boolean; credits: number; error?: string }>;
-  onAuthSuccess: (callback: (data: { email: string; name: string }) => void) => () => void;
 
   // Window controls
   toggleAlwaysOnTop: () => Promise<boolean>;

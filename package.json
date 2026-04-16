@@ -19,14 +19,12 @@
     "lint": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit"
   },
   "dependencies": {
-    "better-sqlite3": "^12.8.0",
     "dotenv": "^16.4.7",
     "mermaid": "^11.4.1",
     "openai": "^4.77.0",
     "uuid": "^11.0.5"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
     "@types/react": "^18.3.14",
     "@types/react-dom": "^18.3.5",
     "@types/uuid": "^10.0.0",

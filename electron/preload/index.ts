@@ -68,24 +68,6 @@ const electronAPI = {
   clearInterviewContext: (): Promise<boolean> =>
     ipcRenderer.invoke('context:clear-interview'),
 
-  setMeetingContext: (data: { agenda: string; attendees: string }): Promise<boolean> =>
-    ipcRenderer.invoke('context:set-meeting', data),
-
-  setCustomContext: (data: { systemPrompt: string }): Promise<boolean> =>
-    ipcRenderer.invoke('context:set-custom', data),
-
-  setConductorContext: (data: {
-    resume: string;
-    jobDescription: string;
-    difficulty: string;
-    questionCount: number;
-    focusAreas: string;
-  }): Promise<boolean> =>
-    ipcRenderer.invoke('context:set-conductor', data),
-
-  conductorNextQuestion: (): void =>
-    ipcRenderer.send('conductor:next-question'),
-
   /* ─── Sessions ─────────────────────────────── */
 
   createSession: (): Promise<string> =>
@@ -166,35 +148,6 @@ const electronAPI = {
 
   openExternal: (url: string): Promise<void> =>
     ipcRenderer.invoke('shell:open-external', url),
-
-  /* ─── Auth ─────────────────────────────────── */
-
-  getUser: (): Promise<{ email: string; name: string; role: string } | null> =>
-    ipcRenderer.invoke('auth:get-user'),
-
-  signOut: (): Promise<void> =>
-    ipcRenderer.invoke('auth:sign-out'),
-
-  continueOffline: (): Promise<{ success: boolean; user: { email: string; name: string; role: string } }> =>
-    ipcRenderer.invoke('auth:continue-offline'),
-
-  login: (email: string, password: string): Promise<{ success: boolean; user?: { email: string; name: string; role: string }; error?: string }> =>
-    ipcRenderer.invoke('auth:login', { email, password }),
-
-  register: (name: string, email: string, password: string): Promise<{ success: boolean; user?: { email: string; name: string; role: string }; error?: string }> =>
-    ipcRenderer.invoke('auth:register', { name, email, password }),
-
-  getUserProfile: (): Promise<{ success: boolean; user?: any; subscription?: any; totalCredits?: number; error?: string }> =>
-    ipcRenderer.invoke('user:get-profile'),
-
-  getCredits: (): Promise<{ success: boolean; credits: number; error?: string }> =>
-    ipcRenderer.invoke('user:get-credits'),
-
-  onAuthSuccess: (callback: (data: { email: string; name: string }) => void) => {
-    const handler = (_: unknown, data: { email: string; name: string }) => callback(data);
-    ipcRenderer.on('auth:success', handler);
-    return () => ipcRenderer.removeListener('auth:success', handler);
-  },
 
   /* ─── Events ───────────────────────────────── */
 

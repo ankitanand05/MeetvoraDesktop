@@ -1,31 +1,18 @@
 /**
  * Session Repository
  *
- * Data access layer for sessions and messages using SQLite (better-sqlite3).
+ * Data access layer for sessions and messages using a JSON file store.
+ * No native addons required — pure Node.js.
  * All public methods remain async so callers need no changes.
- * Internals use synchronous prepared statements for simplicity and performance.
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { getDb } from './db';
+import { getStore, flushStore } from './db';
+import type { SessionRow, MessageRow } from './db';
 
-/** Session record from the database */
-export interface Session {
-  id: string;
-  start_time: string;
-  end_time: string | null;
-  created_at: string;
-}
-
-/** Message record from the database */
-export interface Message {
-  id: string;
-  session_id: string;
-  type: 'transcript' | 'ai';
-  content: string;
-  timestamp: string;
-  created_at: string;
-}
+/** Re-export row types under the original names for backward compat */
+export type Session = SessionRow;
+export type Message = MessageRow;
 
 /**
  * Session Repository — async methods for CRUD operations on sessions and messages.
@@ -37,11 +24,15 @@ export class SessionRepo {
    */
   static async createSession(): Promise<string> {
     const id = uuidv4();
-    const startTime = new Date().toISOString();
+    const now = new Date().toISOString();
 
-    getDb()
-      .prepare('INSERT INTO sessions (id, start_time) VALUES (?, ?)')
-      .run(id, startTime);
+    getStore().sessions.push({
+      id,
+      start_time: now,
+      end_time: null,
+      created_at: now,
+    });
+    flushStore();
 
     console.log(`[SessionRepo] Created session: ${id}`);
     return id;
@@ -51,12 +42,11 @@ export class SessionRepo {
    * End a recording session by setting its end_time.
    */
   static async endSession(sessionId: string): Promise<void> {
-    const endTime = new Date().toISOString();
-
-    getDb()
-      .prepare('UPDATE sessions SET end_time = ? WHERE id = ?')
-      .run(endTime, sessionId);
-
+    const session = getStore().sessions.find((s) => s.id === sessionId);
+    if (session) {
+      session.end_time = new Date().toISOString();
+      flushStore();
+    }
     console.log(`[SessionRepo] Ended session: ${sessionId}`);
   }
 
@@ -64,28 +54,26 @@ export class SessionRepo {
    * Get all sessions, ordered by most recent first.
    */
   static async getAllSessions(): Promise<Session[]> {
-    return getDb()
-      .prepare('SELECT id, start_time, end_time, created_at FROM sessions ORDER BY start_time DESC')
-      .all() as Session[];
+    return [...getStore().sessions].sort(
+      (a, b) => b.start_time.localeCompare(a.start_time)
+    );
   }
 
   /**
    * Get a single session by ID.
    */
   static async getSession(sessionId: string): Promise<Session | undefined> {
-    return getDb()
-      .prepare('SELECT id, start_time, end_time, created_at FROM sessions WHERE id = ?')
-      .get(sessionId) as Session | undefined;
+    return getStore().sessions.find((s) => s.id === sessionId);
   }
 
   /**
-   * Delete a session and all its messages (cascades via FK).
+   * Delete a session and all its messages.
    */
   static async deleteSession(sessionId: string): Promise<void> {
-    getDb()
-      .prepare('DELETE FROM sessions WHERE id = ?')
-      .run(sessionId);
-
+    const store = getStore();
+    store.sessions = store.sessions.filter((s) => s.id !== sessionId);
+    store.messages = store.messages.filter((m) => m.session_id !== sessionId);
+    flushStore();
     console.log(`[SessionRepo] Deleted session: ${sessionId}`);
   }
 
@@ -101,9 +89,15 @@ export class SessionRepo {
   ): Promise<string> {
     const id = uuidv4();
 
-    getDb()
-      .prepare('INSERT INTO messages (id, session_id, type, content, timestamp) VALUES (?, ?, ?, ?, ?)')
-      .run(id, sessionId, type, content, timestamp);
+    getStore().messages.push({
+      id,
+      session_id: sessionId,
+      type,
+      content,
+      timestamp,
+      created_at: new Date().toISOString(),
+    });
+    flushStore();
 
     return id;
   }
@@ -112,12 +106,9 @@ export class SessionRepo {
    * Get all messages for a session, ordered by timestamp.
    */
   static async getMessages(sessionId: string): Promise<Message[]> {
-    return getDb()
-      .prepare(
-        `SELECT id, session_id, type, content, timestamp, created_at
-         FROM messages WHERE session_id = ? ORDER BY timestamp ASC`
-      )
-      .all(sessionId) as Message[];
+    return getStore()
+      .messages.filter((m) => m.session_id === sessionId)
+      .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   }
 
   /**
@@ -127,22 +118,15 @@ export class SessionRepo {
     sessionId: string,
     type: 'transcript' | 'ai'
   ): Promise<Message[]> {
-    return getDb()
-      .prepare(
-        `SELECT id, session_id, type, content, timestamp, created_at
-         FROM messages WHERE session_id = ? AND type = ? ORDER BY timestamp ASC`
-      )
-      .all(sessionId, type) as Message[];
+    return getStore()
+      .messages.filter((m) => m.session_id === sessionId && m.type === type)
+      .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   }
 
   /**
    * Get the total count of messages in a session.
    */
   static async getMessageCount(sessionId: string): Promise<number> {
-    const result = getDb()
-      .prepare('SELECT COUNT(*) as count FROM messages WHERE session_id = ?')
-      .get(sessionId) as { count: number } | undefined;
-
-    return result?.count ?? 0;
+    return getStore().messages.filter((m) => m.session_id === sessionId).length;
   }
 }

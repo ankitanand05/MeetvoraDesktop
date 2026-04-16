@@ -431,6 +431,20 @@
   width: 100%;
   transition: border-color 0.15s;
 }
+/* Single-line API key variant */
+.sp-api-input {
+  resize: none;
+  height: auto;
+  padding: 6px 10px;
+}
+
+/* Range slider with fill colour driven by --range-pct CSS custom property */
+.sp-range-slider {
+  height: 6px;
+  border-radius: 9999px;
+  appearance: none;
+  background: linear-gradient(to right, #6366f1 var(--range-pct, 50%), var(--glass-border-strong) var(--range-pct, 50%));
+}
 .sp-textarea:focus {
   outline: none;
   border-color: #6366f1;

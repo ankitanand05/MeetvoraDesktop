@@ -242,7 +242,6 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
           className="flex items-center gap-1.5 text-[11px] transition-colors px-2 py-1 rounded-md"
           style={{ color: 'var(--text-muted)' }}
           onClick={handleCopy}
-          title="Copy code"
         >
           {copied ? (
             <>
@@ -967,24 +966,29 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ messages, isListening, onSendMess
                         <span>Explain</span>
                       </button>
                       {/* GPT-generated follow-up suggestions */}
-                      {suggestions && suggestions.length > 0 && suggestions.map((s, si) => (
-                        <button
-                          key={si}
-                          onClick={() => onSelectSuggestion?.(s)}
-                          className="flex items-center gap-1 px-2 py-0.5 rounded-full whitespace-nowrap transition-all hover:scale-[1.02] active:scale-[0.98]"
-                          style={{
-                            background: 'var(--glass-bg)',
-                            border: '1px solid var(--glass-border)',
-                            color: 'var(--text-secondary)',
-                            fontSize: '9px',
-                          }}
-                          onMouseEnter={e => { e.currentTarget.style.borderColor = '#06b6d4'; }}
-                          onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--glass-border)'; }}
-                        >
-                          <kbd className="text-[8px] font-mono" style={{ color: 'var(--accent-primary)' }}>{si + 2}</kbd>
-                          <span>{s}</span>
-                        </button>
-                      ))}
+                      {suggestions && suggestions.length > 0 && suggestions.map((s, si) => {
+                        const words = s.trim().split(/\s+/);
+                        const label = words.length > 4 ? words.slice(0, 4).join(' ') + '…' : s;
+                        return (
+                          <button
+                            key={si}
+                            onClick={() => onSelectSuggestion?.(s)}
+                            title={s}
+                            className="flex items-center gap-1 px-1.5 py-0.5 rounded-full whitespace-nowrap transition-all hover:scale-[1.02] active:scale-[0.98]"
+                            style={{
+                              background: 'var(--glass-bg)',
+                              border: '1px solid var(--glass-border)',
+                              color: 'var(--text-secondary)',
+                              fontSize: '9px',
+                            }}
+                            onMouseEnter={e => { e.currentTarget.style.borderColor = '#06b6d4'; }}
+                            onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--glass-border)'; }}
+                          >
+                            <kbd className="text-[8px] font-mono" style={{ color: 'var(--accent-primary)' }}>{si + 2}</kbd>
+                            <span>{label}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                   <span className="text-[9px] mt-1 mr-1" style={{ color: 'var(--text-faint)' }}>{formatTime(msg.timestamp)}</span>
@@ -1003,7 +1007,6 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ messages, isListening, onSendMess
               onClick={() => { onCloseTextInput(); setInputText(''); }}
               className="w-6 h-6 flex items-center justify-center rounded-md transition-all shrink-0"
               style={{ color: 'var(--text-muted)' }}
-              title="Close"
             >
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="18" y1="6" x2="6" y2="18" />
@@ -1031,7 +1034,6 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ messages, isListening, onSendMess
               onClick={handleSend}
               disabled={!inputText.trim() || isProcessing}
               className="w-6 h-6 flex items-center justify-center bg-blue-600/80 text-white rounded-md hover:bg-blue-600 active:bg-blue-700 transition-all disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
-              title="Send"
             >
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="22" y1="2" x2="11" y2="13" />

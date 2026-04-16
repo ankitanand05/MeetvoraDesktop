@@ -1,85 +1,147 @@
 /**
- * Database Module — SQLite (better-sqlite3)
+ * Database Module — JSON File Store
  *
- * Embedded SQLite database stored in the user's app data directory.
- * No external server or Docker required — zero-install, works offline.
+ * Embedded JSON-file database stored in the user's app data directory.
+ * No native addons or external dependencies — pure Node.js, works offline.
  *
- * DB file location:  <userData>/meetvora.db
- *   Windows: %APPDATA%\Meetvora\meetvora.db
- *   macOS:   ~/Library/Application Support/Meetvora/meetvora.db
- *   Linux:   ~/.config/Meetvora/meetvora.db
+ * DB file location:  <userData>/meetvora-data.json
+ *   Windows: %APPDATA%\Meetvora\meetvora-data.json
+ *   macOS:   ~/Library/Application Support/Meetvora/meetvora-data.json
+ *   Linux:   ~/.config/Meetvora/meetvora-data.json
  */
 
-import Database from 'better-sqlite3';
 import { app } from 'electron';
+import fs from 'fs';
 import path from 'path';
 
-/** Singleton database instance */
-let db: Database.Database | null = null;
+/** Shape of the on-disk JSON store */
+export interface StoreData {
+  sessions: SessionRow[];
+  messages: MessageRow[];
+}
 
-/** SQLite schema — created on first launch if tables don't exist yet */
-const SCHEMA_SQL = `
-  CREATE TABLE IF NOT EXISTS sessions (
-    id         TEXT PRIMARY KEY,
-    start_time TEXT NOT NULL,
-    end_time   TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
+export interface SessionRow {
+  id: string;
+  start_time: string;
+  end_time: string | null;
+  created_at: string;
+}
 
-  CREATE TABLE IF NOT EXISTS messages (
-    id         TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    type       TEXT NOT NULL CHECK (type IN ('transcript', 'ai')),
-    content    TEXT NOT NULL,
-    timestamp  TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
+export interface MessageRow {
+  id: string;
+  session_id: string;
+  type: 'transcript' | 'ai';
+  content: string;
+  timestamp: string;
+  created_at: string;
+}
 
-  CREATE INDEX IF NOT EXISTS idx_sessions_start_time        ON sessions (start_time DESC);
-  CREATE INDEX IF NOT EXISTS idx_messages_session_id        ON messages (session_id);
-  CREATE INDEX IF NOT EXISTS idx_messages_type              ON messages (type);
-  CREATE INDEX IF NOT EXISTS idx_messages_session_timestamp ON messages (session_id, timestamp ASC);
-`;
+/** Singleton store */
+let store: StoreData | null = null;
+let storePath = '';
+
+/** Debounce / auto-save state */
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+let autoSaveInterval: ReturnType<typeof setInterval> | null = null;
+let dirty = false;
+
+const FLUSH_DEBOUNCE_MS = 2_000;   // coalesce rapid writes — flush at most every 2 s
+const AUTO_SAVE_MS      = 30_000;  // safety-net: flush every 30 s if dirty
+
+function defaultStore(): StoreData {
+  return { sessions: [], messages: [] };
+}
 
 /**
- * Initialize the SQLite database.
- * Synchronous — creates the DB file and schema on first run.
+ * Persist the current store to disk atomically (write-then-rename).
+ * Wrapped in try-catch so a single disk error never crashes the app.
+ */
+function writeStoreToDisk(): void {
+  if (!store) return;
+  try {
+    const tmp = storePath + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(store), 'utf-8');
+    fs.renameSync(tmp, storePath);
+    dirty = false;
+  } catch (err) {
+    console.error('[DB] Failed to flush store to disk:', err);
+  }
+}
+
+/**
+ * Mark the store as dirty and schedule a debounced flush.
+ * Call this after every in-memory mutation instead of writing immediately.
+ */
+export function flushStore(): void {
+  dirty = true;
+  if (flushTimer) clearTimeout(flushTimer);
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    writeStoreToDisk();
+  }, FLUSH_DEBOUNCE_MS);
+}
+
+/**
+ * Force an immediate synchronous flush (used at shutdown).
+ */
+export function flushStoreSync(): void {
+  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+  if (dirty) writeStoreToDisk();
+}
+
+/**
+ * Initialize the JSON file store.
  * Call this once during app startup.
  */
 export function initializeDatabase(): void {
-  const dbPath = path.join(app.getPath('userData'), 'meetvora.db');
+  storePath = path.join(app.getPath('userData'), 'meetvora-data.json');
 
-  db = new Database(dbPath);
+  if (fs.existsSync(storePath)) {
+    try {
+      const raw = fs.readFileSync(storePath, 'utf-8');
+      store = JSON.parse(raw) as StoreData;
+      // Ensure both arrays exist (defensive)
+      if (!Array.isArray(store.sessions)) store.sessions = [];
+      if (!Array.isArray(store.messages)) store.messages = [];
+    } catch {
+      console.warn('[DB] Corrupt store file — starting fresh');
+      store = defaultStore();
+      writeStoreToDisk();
+    }
+  } else {
+    store = defaultStore();
+    writeStoreToDisk();
+  }
 
-  // Enable WAL mode for better write performance; enforce FK constraints
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
+  // Periodic safety-net: flush every 30 s if there are unsaved changes
+  autoSaveInterval = setInterval(() => {
+    if (dirty) writeStoreToDisk();
+  }, AUTO_SAVE_MS);
 
-  // Create tables and indexes (idempotent — safe to run on every startup)
-  db.exec(SCHEMA_SQL);
-
-  console.log(`[DB] SQLite ready: ${dbPath}`);
+  console.log(`[DB] JSON store ready: ${storePath}`);
 }
 
 /**
- * Get the database instance.
+ * Get the store data.
  * Throws if initializeDatabase() hasn't been called yet.
  */
-export function getDb(): Database.Database {
-  if (!db) {
+export function getStore(): StoreData {
+  if (!store) {
     throw new Error('Database not initialized. Call initializeDatabase() first.');
   }
-  return db;
+  return store;
 }
 
 /**
- * Close the database connection gracefully.
+ * Close / flush the store gracefully.
  * Call this during app shutdown.
  */
 export function closeDatabase(): void {
-  if (db) {
-    db.close();
-    db = null;
-    console.log('[DB] Database closed');
+  if (autoSaveInterval) { clearInterval(autoSaveInterval); autoSaveInterval = null; }
+  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+  if (store) {
+    if (dirty) writeStoreToDisk();
+    store = null;
+    console.log('[DB] Store flushed and closed');
   }
 }

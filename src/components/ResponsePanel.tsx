@@ -48,7 +48,6 @@ function parseResponseBlocks(text: string): React.ReactNode[] {
               className="text-[10px] transition-colors cursor-pointer"
               style={{ color: 'var(--text-muted)' }}
               onClick={() => navigator.clipboard?.writeText(codeLines.join('\n'))}
-              title="Copy code"
             >
               Copy
             </button>
@@ -210,7 +209,6 @@ const ResponsePanel: React.FC<ResponsePanelProps> = ({ response }) => {
               className="text-[10px] transition-colors cursor-pointer"
               style={{ color: 'var(--text-muted)' }}
               onClick={() => navigator.clipboard?.writeText(response.text)}
-              title="Copy response"
             >
               Copy all
             </button>

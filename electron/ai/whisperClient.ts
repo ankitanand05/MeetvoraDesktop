@@ -94,7 +94,7 @@ export async function transcribeAudio(
   audioBuffer: Buffer,
   apiKey: string,
   language: string = 'en',
-  model = 'gpt-4o-mini-transcribe-2025-12-15'
+  model = process.env.TRANSCRIPTION_MODEL ?? 'gpt-4o-mini-transcribe-2025-12-15'
 ): Promise<string> {
 
   const openai = new OpenAI({ apiKey });

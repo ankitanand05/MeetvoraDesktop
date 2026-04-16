@@ -1,0 +1,14 @@
+{
+  "sonarLintAnalysisMode": "onDemand",
+  "sonarLintRules": {
+    "typescript:S6853": {
+      "level": "off"
+    },
+    "typescript:S6850": {
+      "level": "off"
+    },
+    "Web:S6853": {
+      "level": "off"
+    }
+  }
+}
