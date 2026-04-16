@@ -8,6 +8,7 @@ import { useSession } from './hooks/useSession';
 import { useIPC } from './hooks/useIPC';
 import { ThemeProvider, useTheme } from './hooks/useTheme';
 import { useSettings } from './hooks/useSettings';
+import ChatGPTPanel from './components/ChatGPTPanel';
 import ErrorBoundary from './components/ErrorBoundary';
 
 /** Inner component that reads the theme */
@@ -21,6 +22,7 @@ const AppInner: React.FC = () => {
   const [showTextInput, setShowTextInput] = useState(false);
   const [isTeleprompter, setIsTeleprompter] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showChatGPT, setShowChatGPT] = useState(false);
 
   // Wire up IPC event listeners
   useIPC(session, setIsStealth);
@@ -124,6 +126,10 @@ const AppInner: React.FC = () => {
         case 'G': // Toggle teleprompter mode
           e.preventDefault();
           window.electronAPI.toggleTeleprompter().then(active => setIsTeleprompter(active));
+          return;
+        case 'W': // Toggle ChatGPT webview
+          e.preventDefault();
+          setShowChatGPT(prev => !prev);
           return;
       }
 
@@ -280,6 +286,8 @@ const AppInner: React.FC = () => {
         isTextOpen={showTextInput}
         error={session.error}
         onOpenSettings={() => setShowSettings(true)}
+        onToggleChatGPT={() => setShowChatGPT(prev => !prev)}
+        isChatGPTOpen={showChatGPT}
         spacebarMode={settings.spacebarMode}
         audioDeviceId={settings.audioDeviceId}
       />
@@ -290,6 +298,11 @@ const AppInner: React.FC = () => {
           onClose={() => setShowSettings(false)}
           onViewHistory={() => {}}
         />
+      )}
+
+      {/* ChatGPT webview overlay — stealth-protected */}
+      {showChatGPT && (
+        <ChatGPTPanel onClose={() => setShowChatGPT(false)} />
       )}
     </div>
   );

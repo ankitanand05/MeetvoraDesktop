@@ -135,6 +135,7 @@ function createWindow(): void {
       sandbox: true,
       webSecurity: true,
       allowRunningInsecureContent: false,
+      webviewTag: true,
     },
   });
 
