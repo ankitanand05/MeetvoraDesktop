@@ -20,6 +20,8 @@ interface ElectronAPI {
   sendVoiceQuestion: (buffer: ArrayBuffer) => void;
   sendTextQuestion: (question: string) => void;
   captureScreenshot: () => void;
+  screenshotToClipboard: () => Promise<boolean>;
+  chatgptTranscribe: (buffer: ArrayBuffer) => Promise<string>;
   setInterviewContext: (data: { profile: string; jobDescription: string }) => Promise<boolean>;
   clearInterviewContext: () => Promise<boolean>;
 
@@ -60,6 +62,7 @@ interface ElectronAPI {
   toggleStealth: () => Promise<boolean>;
   positionWindow: (position: string) => void;
   toggleVisibility: () => void;
+  setWindowOpacity: (value: number) => void;
   toggleTeleprompter: () => Promise<boolean>;
   minimizeWindow: () => void;
   closeWindow: () => void;
@@ -73,6 +76,7 @@ interface ElectronAPI {
   onStealthChanged: (callback: (enabled: boolean) => void) => () => void;
   onStatusChange: (callback: (data: { status: string }) => void) => () => void;
   onError: (callback: (data: { message: string; code?: string }) => void) => () => void;
+  onToggleChatGPT: (callback: () => void) => () => void;
 }
 
 interface Window {

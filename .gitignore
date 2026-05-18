@@ -8,6 +8,7 @@ package-lock.json
 dist/
 dist-electron/
 release/
+*-setup.exe
 *.jsbundle
 
 # ── OS files ──

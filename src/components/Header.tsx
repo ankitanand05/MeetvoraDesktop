@@ -15,6 +15,8 @@ interface HeaderProps {
   onBack?: () => void;
   onMinimize: () => void;
   onClose: () => void;
+  onOpacityChange?: (value: number) => void;
+  opacity?: number;
 }
 
 const SHORTCUTS = [
@@ -44,6 +46,8 @@ const Header: React.FC<HeaderProps> = ({
   onBack,
   onMinimize,
   onClose,
+  onOpacityChange,
+  opacity = 0.5,
 }) => {
   const { isDark, toggle: toggleTheme } = useTheme();
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -289,6 +293,34 @@ const Header: React.FC<HeaderProps> = ({
         <p className="text-[9px] mt-2 text-center" style={{ color: 'var(--text-muted)' }}>
           Ctrl+Shift+` to show/hide from anywhere
         </p>
+      </div>
+    )}
+
+    {/* Stealth Opacity Slider — only visible when stealth mode is active */}
+    {isStealth && (
+      <div
+        className="flex items-center gap-2 px-3 py-1.5 select-none titlebar-no-drag"
+        style={{
+          background: 'var(--glass-bg-strong)',
+          borderBottom: '1px solid var(--glass-border)',
+        }}
+      >
+        <span className="text-[10px] font-medium shrink-0" style={{ color: '#8b5cf6' }}>
+          👻
+        </span>
+        <input
+          type="range"
+          min="10"
+          max="100"
+          value={Math.round(opacity * 100)}
+          onChange={(e) => onOpacityChange?.(parseInt(e.target.value) / 100)}
+          className="flex-1 h-1 accent-purple-500 cursor-pointer"
+          style={{ accentColor: '#8b5cf6' }}
+          aria-label="Window opacity"
+        />
+        <span className="text-[10px] font-mono w-7 text-right" style={{ color: 'var(--text-muted)' }}>
+          {Math.round(opacity * 100)}%
+        </span>
       </div>
     )}
     </>
