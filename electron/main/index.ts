@@ -34,7 +34,7 @@ import {
   Menu,
   nativeImage,
 } from 'electron';
-import { registerIpcHandlers, isStealthActive, isPinnedActive, getStealthOpacity } from '../ipc/handlers';
+import { registerIpcHandlers, isStealthActive, isPinnedActive } from '../ipc/handlers';
 import { initializeDatabase, closeDatabase } from '../storage/db';
 
 let mainWindow: BrowserWindow | null = null;
@@ -246,18 +246,13 @@ app.whenReady().then(async () => {
             mainWindow.hide();
           } else {
             if (mainWindow.isMinimized()) mainWindow.restore();
-            // Apply content protection BEFORE showing to prevent screen-share flash
-            if (isStealthActive()) {
-              mainWindow.setContentProtection(true);
-              mainWindow.setOpacity(0);
-            }
             mainWindow.show();
             mainWindow.focus();
             if (isStealthActive()) {
+              mainWindow.setContentProtection(true);
               mainWindow.setSkipTaskbar(true);
               mainWindow.setTitle(' ');
               mainWindow.setAlwaysOnTop(true, 'screen-saver');
-              mainWindow.setOpacity(getStealthOpacity());
             } else if (isPinnedActive()) {
               mainWindow.setContentProtection(true);
               mainWindow.setAlwaysOnTop(true, 'screen-saver');
@@ -295,17 +290,12 @@ app.whenReady().then(async () => {
     } else {
       // Restore first so the window isn't in a minimized state when shown
       if (mainWindow.isMinimized()) mainWindow.restore();
-      // Apply content protection BEFORE showing to prevent screen-share flash
-      if (isStealthActive()) {
-        mainWindow.setContentProtection(true);
-        mainWindow.setOpacity(0);
-      }
       mainWindow.show();
       if (isStealthActive()) {
+        mainWindow.setContentProtection(true);
         mainWindow.setSkipTaskbar(true);
         mainWindow.setTitle(' ');
         mainWindow.setAlwaysOnTop(true, 'screen-saver');
-        mainWindow.setOpacity(getStealthOpacity());
       } else if (isPinnedActive()) {
         // Re-apply pin props (Windows can lose them after hide/restore)
         mainWindow.setContentProtection(true);
@@ -331,22 +321,6 @@ app.whenReady().then(async () => {
     console.log(`[Main] Global shortcut registered: ${regPrimary ? primary : ''} ${regFallback ? fallback : ''}`);
   } else {
     console.error('[Main] No global shortcuts could be registered — use the tray icon to show/hide');
-  }
-
-  // ── Global shortcut: Ctrl+Shift+G → toggle ChatGPT panel ──
-  const chatGPTShortcut = process.platform === 'darwin' ? 'Cmd+Shift+G' : 'Ctrl+Shift+G';
-  const regChatGPT = globalShortcut.register(chatGPTShortcut, () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    // Show window first if hidden
-    if (!mainWindow.isVisible() || mainWindow.isMinimized()) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
-    }
-    mainWindow.webContents.send('toggle:chatgpt');
-  });
-  if (regChatGPT) {
-    console.log(`[Main] ChatGPT shortcut registered: ${chatGPTShortcut}`);
   }
 
   app.on('activate', () => {

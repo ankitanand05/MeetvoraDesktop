@@ -5,7 +5,7 @@
  * the main process and the renderer process.
  */
 
-import { ipcMain, BrowserWindow, desktopCapturer, screen, shell, clipboard } from 'electron';
+import { ipcMain, BrowserWindow, desktopCapturer, screen, shell } from 'electron';
 import { transcribeAudio } from '../ai/whisperClient';
 import { streamGptResponse, clearCachedClient } from '../ai/gptClient';
 import {
@@ -473,14 +473,8 @@ export function isPinnedActive(): boolean {
   return _pinnedEnabled;
 }
 
-/** Get the current stealth opacity value (used by main.ts) */
-export function getStealthOpacity(): number {
-  return _stealthOpacity;
-}
-
 let _stealthEnabled = false;
 let _pinnedEnabled = false;
-let _stealthOpacity = 0.5;
 
 export function registerIpcHandlers(): void {
 
@@ -542,23 +536,6 @@ export function registerIpcHandlers(): void {
     }
     processingQueue.push({ buffer, sessionId: activeSessionId });
     drainQueue();
-  });
-
-  // ─── CHATGPT AUDIO TRANSCRIBE (transcribe-only, no GPT, no UI side-effects) ──
-
-  ipcMain.handle('chatgpt:transcribe', async (_event, audioBuffer: ArrayBuffer) => {
-    const buffer = Buffer.from(audioBuffer);
-    if (buffer.length < 500) return '';
-
-    try {
-      const apiKey = getApiKey();
-      if (!apiKey) return '';
-      const text = await transcribeAudio(buffer, apiKey, userPrefs.interviewLanguage || 'en', userPrefs.transcriptModel);
-      return text?.trim() || '';
-    } catch (err: any) {
-      console.error('[ChatGPT Transcribe] Error:', err);
-      return '';
-    }
   });
 
   // ─── VOICE QUESTION (mic) ──────────────────────────────────
@@ -826,35 +803,6 @@ export function registerIpcHandlers(): void {
     }
   });
 
-  // ─── SCREENSHOT TO CLIPBOARD (for ChatGPT paste) ───────────
-
-  ipcMain.handle('screenshot:to-clipboard', async () => {
-    try {
-      const primaryDisplay = screen.getPrimaryDisplay();
-      const { width, height } = primaryDisplay.size;
-      const scaleFactor = primaryDisplay.scaleFactor || 1;
-
-      const sources = await desktopCapturer.getSources({
-        types: ['screen'],
-        thumbnailSize: {
-          width: Math.round(width * scaleFactor),
-          height: Math.round(height * scaleFactor),
-        },
-      });
-
-      if (!sources || sources.length === 0) return false;
-      const image = sources[0].thumbnail;
-      if (image.isEmpty()) return false;
-
-      clipboard.writeImage(image);
-      console.log('[IPC] Screenshot written to clipboard for ChatGPT');
-      return true;
-    } catch (err: any) {
-      console.error('[Screenshot→Clipboard] Error:', err);
-      return false;
-    }
-  });
-
   // ─── INTERVIEW CONTEXT ──────────────────────────────────────
 
   ipcMain.handle('context:set-interview', async (_event, data: { profile: string; jobDescription: string }) => {
@@ -1104,7 +1052,6 @@ export function registerIpcHandlers(): void {
     win.setSkipTaskbar(true);
     win.setTitle(' ');
     win.setAlwaysOnTop(true, 'screen-saver');
-    win.setOpacity(_stealthOpacity);
   }
 
   let showHandler: (() => void) | null = null;
@@ -1155,9 +1102,6 @@ export function registerIpcHandlers(): void {
     if (!getStealthEnabled()) return;
     setStealthEnabled(false);
     if (blurTimeout) { clearTimeout(blurTimeout); blurTimeout = null; }
-
-    // Restore full opacity
-    win.setOpacity(1.0);
 
     // When pin is still active, preserve contentProtection/skipTaskbar/alwaysOnTop
     // Only strip them if user hasn't pinned the window.
@@ -1284,36 +1228,19 @@ export function registerIpcHandlers(): void {
       win.hide();
     } else {
       if (win.isMinimized()) win.restore();
-      // Apply content protection BEFORE showing to prevent screen-share flash
-      if (_stealthEnabled) {
-        win.setContentProtection(true);
-        win.setOpacity(0);
-      }
       win.show();
       // Re-apply stealth props if active (can be lost after minimize/restore)
       if (_stealthEnabled) {
+        win.setContentProtection(true);
         win.setSkipTaskbar(true);
         win.setTitle(' ');
         win.setAlwaysOnTop(true, 'screen-saver');
-        win.setOpacity(_stealthOpacity);
       } else if (_pinnedEnabled) {
         // Re-apply pin props (Windows can lose them after restore)
         win.setContentProtection(true);
         win.setAlwaysOnTop(true, 'screen-saver');
       }
       win.focus();
-    }
-  });
-
-  // ─── WINDOW OPACITY (stealth transparency slider) ──────────
-
-  ipcMain.on('window:set-opacity', (_event, value: number) => {
-    const win = getWindow();
-    if (!win) return;
-    const clamped = Math.max(0.1, Math.min(1.0, value));
-    _stealthOpacity = clamped;
-    if (_stealthEnabled) {
-      win.setOpacity(clamped);
     }
   });
 

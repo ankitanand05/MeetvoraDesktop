@@ -60,14 +60,6 @@ const electronAPI = {
     ipcRenderer.send('screenshot:capture');
   },
 
-  screenshotToClipboard: (): Promise<boolean> =>
-    ipcRenderer.invoke('screenshot:to-clipboard'),
-
-  chatgptTranscribe: (buffer: ArrayBuffer): Promise<string> => {
-    if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 500) return Promise.resolve('');
-    return ipcRenderer.invoke('chatgpt:transcribe', buffer);
-  },
-
   /* ─── Context ─────────────────────────────── */
 
   setInterviewContext: (data: { profile: string; jobDescription: string }): Promise<boolean> =>
@@ -145,9 +137,6 @@ const electronAPI = {
   toggleVisibility: (): void =>
     ipcRenderer.send('window:toggle-visibility'),
 
-  setWindowOpacity: (value: number): void =>
-    ipcRenderer.send('window:set-opacity', value),
-
   toggleTeleprompter: (): Promise<boolean> =>
     ipcRenderer.invoke('window:toggle-teleprompter'),
 
@@ -202,12 +191,6 @@ const electronAPI = {
     const handler = (_: unknown, data: ErrorEvent) => callback(data);
     ipcRenderer.on('error:occurred', handler);
     return () => ipcRenderer.removeListener('error:occurred', handler);
-  },
-
-  onToggleChatGPT: (callback: () => void) => {
-    const handler = () => callback();
-    ipcRenderer.on('toggle:chatgpt', handler);
-    return () => ipcRenderer.removeListener('toggle:chatgpt', handler);
   },
 };
 

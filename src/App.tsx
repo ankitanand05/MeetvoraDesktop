@@ -9,7 +9,6 @@ import { useIPC } from './hooks/useIPC';
 import { ThemeProvider, useTheme } from './hooks/useTheme';
 import { useSettings } from './hooks/useSettings';
 import ChatGPTPanel from './components/ChatGPTPanel';
-import GhostCursor from './components/GhostCursor';
 import ErrorBoundary from './components/ErrorBoundary';
 
 /** Inner component that reads the theme */
@@ -24,18 +23,9 @@ const AppInner: React.FC = () => {
   const [isTeleprompter, setIsTeleprompter] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showChatGPT, setShowChatGPT] = useState(false);
-  const [stealthOpacity, setStealthOpacity] = useState(0.5);
 
   // Wire up IPC event listeners
   useIPC(session, setIsStealth);
-
-  // Listen for global shortcut to toggle ChatGPT
-  useEffect(() => {
-    const unsub = window.electronAPI.onToggleChatGPT(() => {
-      setShowChatGPT(prev => !prev);
-    });
-    return unsub;
-  }, []);
 
   // Check API key on mount
   useEffect(() => {
@@ -66,16 +56,6 @@ const AppInner: React.FC = () => {
     }
   }, [settings.seeThrough, settings.transparencyLevel, isDark]);
 
-  // Toggle ghost-cursor-active class on body when stealth is enabled
-  useEffect(() => {
-    if (isStealth) {
-      document.body.classList.add('ghost-cursor-active');
-    } else {
-      document.body.classList.remove('ghost-cursor-active');
-    }
-    return () => document.body.classList.remove('ghost-cursor-active');
-  }, [isStealth]);
-
   /** Interview setup complete — enter session (no going back) */
   const handleInterviewSetupComplete = async (profile: string, jobDescription: string) => {
     try {
@@ -95,11 +75,6 @@ const AppInner: React.FC = () => {
     }
   };
 
-  const handleOpacityChange = useCallback((value: number) => {
-    setStealthOpacity(value);
-    window.electronAPI.setWindowOpacity(value);
-  }, []);
-
   const minHandler = () => window.electronAPI.minimizeWindow();
   const closeHandler = () => window.electronAPI.closeWindow();
 
@@ -118,8 +93,7 @@ const AppInner: React.FC = () => {
 
       // ── Single-key shortcuts (no modifier) ──
       switch (e.key.toUpperCase()) {
-        case ' ': // Spacebar — voice recording shortcut (blocked when ChatGPT panel is open)
-          if (showChatGPT) return; // ChatGPTPanel handles it
+        case ' ': // Spacebar — voice recording shortcut
           e.preventDefault();
           window.dispatchEvent(new CustomEvent('shortcut:spacebar', { detail: { mode: settings.spacebarMode } }));
           return;
@@ -141,9 +115,7 @@ const AppInner: React.FC = () => {
           return;
         case 'ESCAPE':
           e.preventDefault();
-          if (showChatGPT) {
-            setShowChatGPT(false);
-          } else if (showSettings) {
+          if (showSettings) {
             setShowSettings(false);
           } else if (session.isAlwaysOnTop) {
             window.electronAPI.minimizeWindow();
@@ -238,7 +210,7 @@ const AppInner: React.FC = () => {
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [screen, session.status, session.suggestions, settings.spacebarMode, showSettings, showChatGPT, session.isAlwaysOnTop]);
+  }, [screen, session.status, session.suggestions, settings.spacebarMode, showSettings, session.isAlwaysOnTop]);
 
   // ── Setup screen (interview only — once entered session, no going back) ──
   if (screen === 'setup') {
@@ -272,8 +244,6 @@ const AppInner: React.FC = () => {
         onToggleStealth={handleToggleStealth}
         onMinimize={() => window.electronAPI.minimizeWindow()}
         onClose={() => window.electronAPI.closeWindow()}
-        onOpacityChange={handleOpacityChange}
-        opacity={stealthOpacity}
       />
 
       {/* API key warning banner */}
@@ -332,11 +302,8 @@ const AppInner: React.FC = () => {
 
       {/* ChatGPT webview overlay — stealth-protected */}
       {showChatGPT && (
-        <ChatGPTPanel onClose={() => setShowChatGPT(false)} isStealth={isStealth} />
+        <ChatGPTPanel onClose={() => setShowChatGPT(false)} />
       )}
-
-      {/* Ghost cursor — custom cursor visible only to user when stealth hides content from screen capture */}
-      {isStealth && <GhostCursor />}
     </div>
   );
 };

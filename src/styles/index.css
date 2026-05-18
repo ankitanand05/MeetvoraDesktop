@@ -123,12 +123,6 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
-  /* Ghost cursor mode — hide system cursor so screen-share viewers see it "stuck" */
-  .ghost-cursor-active,
-  .ghost-cursor-active * {
-    cursor: none !important;
-  }
-
   /* Sleek scrollbar */
   ::-webkit-scrollbar {
     width: 4px;
