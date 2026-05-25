@@ -5,7 +5,7 @@
  * the main process and the renderer process.
  */
 
-import { ipcMain, BrowserWindow, desktopCapturer, screen, shell } from 'electron';
+import { ipcMain, BrowserWindow, desktopCapturer, screen, shell, clipboard, webContents } from 'electron';
 import { transcribeAudio } from '../ai/whisperClient';
 import { streamGptResponse, clearCachedClient } from '../ai/gptClient';
 import {
@@ -23,6 +23,9 @@ import { getConfig, setConfig } from '../storage/config';
 
 // Track active session
 let activeSessionId: string | null = null;
+
+// Flag to prevent parallel transcription in ChatGPT audio-listen mode
+let isChatGptTranscribing = false;
 
 // Processing queue to prevent overlapping GPT calls
 let isProcessingChunk = false;
@@ -250,6 +253,33 @@ function getApiKey(): string | null {
 }
 
 /**
+ * Strip words written in Arabic script (Urdu) from a transcript.
+ *
+ * Urdu uses Arabic Unicode blocks (U+0600–U+06FF and related ranges).
+ * Hindi uses Devanagari (U+0900–U+097F) — kept intact.
+ * English Latin text — kept intact.
+ *
+ * Strategy: split on whitespace, drop any token that contains at least
+ * one Arabic-script character, re-join the survivors.
+ */
+function filterUrduScript(text: string): string {
+  if (!text) return text;
+  // Covers: Arabic, Arabic Supplement, Arabic Extended-A, Arabic Extended-B,
+  //         Arabic Presentation Forms-A, Arabic Presentation Forms-B
+  const arabicScript = /[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]/;
+  const filtered = text
+    .split(/\s+/)
+    .filter(token => token.length === 0 || !arabicScript.test(token))
+    .join(' ')
+    .replace(/\s{2,}/g, ' ')   // collapse any double-spaces left behind
+    .trim();
+  if (filtered !== text) {
+    console.log(`[Filter] Urdu removed — before: ${text.length} chars, after: ${filtered.length} chars`);
+  }
+  return filtered;
+}
+
+/**
  * Helper: Get focused window
  */
 function getWindow(): BrowserWindow | null {
@@ -383,13 +413,13 @@ async function processAudioChunk(audioBuffer: Buffer, sessionId: string): Promis
 
     const lang = userPrefs.interviewLanguage || 'en';
     if (segments.length === 1) {
-      transcript = await transcribeAudio(segments[0], apiKey, lang, userPrefs.transcriptModel);
+      transcript = filterUrduScript(await transcribeAudio(segments[0], apiKey, lang, userPrefs.transcriptModel));
     } else {
       console.log(`[processAudioChunk] Large audio: splitting into ${segments.length} segments for parallel transcription`);
       const results = await Promise.all(
         segments.map(seg => transcribeAudio(seg, apiKey, lang, userPrefs.transcriptModel))
       );
-      transcript = results.filter(t => t.length > 0).join(' ');
+      transcript = filterUrduScript(results.filter(t => t.length > 0).join(' '));
     }
 
     if (!transcript || transcript.trim().length === 0) {
@@ -560,7 +590,7 @@ export function registerIpcHandlers(): void {
       setStatus('processing');
 
       // Transcribe mic audio (use user's preferred interview language)
-      const question = await transcribeAudio(buffer, apiKey, userPrefs.interviewLanguage || 'en', userPrefs.transcriptModel);
+      const question = filterUrduScript(await transcribeAudio(buffer, apiKey, userPrefs.interviewLanguage || 'en', userPrefs.transcriptModel));
 
       if (!question || question.trim().length === 0) {
         sendError('Could not understand audio. Please try again.', 'EMPTY_QUESTION');
@@ -800,6 +830,201 @@ export function registerIpcHandlers(): void {
       console.error('[Screenshot] Error:', err);
       sendError(err.message || 'Screenshot failed', 'SCREENSHOT_ERROR');
       setStatus(activeSessionId ? 'listening' : 'idle');
+    }
+  });
+
+  // ─── SCREENSHOT → CLIPBOARD (for ChatGPT paste) ────────────
+
+  ipcMain.handle('screenshot:to-clipboard', async () => {
+    try {
+      const primaryDisplay = screen.getPrimaryDisplay();
+      const { width, height } = primaryDisplay.size;
+      const scaleFactor = primaryDisplay.scaleFactor || 1;
+
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: {
+          width: Math.round(width * scaleFactor),
+          height: Math.round(height * scaleFactor),
+        },
+      });
+
+      if (!sources || sources.length === 0) {
+        return { success: false, error: 'No screen sources found' };
+      }
+
+      const screenshot = sources[0].thumbnail;
+      if (screenshot.isEmpty()) {
+        return { success: false, error: 'Screenshot is empty' };
+      }
+
+      clipboard.writeImage(screenshot);
+      console.log('[IPC] Screenshot captured and copied to clipboard for ChatGPT paste');
+      return { success: true };
+    } catch (err: any) {
+      console.error('[Screenshot→Clipboard]', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ─── SCREENSHOT → CLIPBOARD + PASTE INTO WEBVIEW (ChatGPT) ──
+  // Single IPC that:
+  //  1. Captures screen → OS clipboard
+  //  2. Gives OS focus to the target webview's webContents
+  //  3. Focuses ChatGPT's input via JS
+  //  4. Sends a real Ctrl+V keyboard event so the browser pastes the image
+
+  ipcMain.handle('screenshot:paste-to-webview', async (_event, webContentsId: number) => {
+    try {
+      // ── 1. Capture screen ──────────────────────────────────
+      const primaryDisplay = screen.getPrimaryDisplay();
+      const { width, height } = primaryDisplay.size;
+      const scaleFactor = primaryDisplay.scaleFactor || 1;
+
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: {
+          width:  Math.round(width  * scaleFactor),
+          height: Math.round(height * scaleFactor),
+        },
+      });
+
+      if (!sources || sources.length === 0) {
+        return { success: false, error: 'No screen sources found' };
+      }
+
+      const screenshot = sources[0].thumbnail;
+      if (screenshot.isEmpty()) {
+        return { success: false, error: 'Screenshot is empty' };
+      }
+
+      // ── 2. Write PNG to OS clipboard ──────────────────────
+      clipboard.writeImage(screenshot);
+      console.log('[SS→Paste] Screenshot in clipboard, targeting webContentsId:', webContentsId);
+
+      // ── 3. Locate the webview's webContents ───────────────
+      // Use getAllWebContents() — fromId() is deprecated in Electron 27+
+      const allWC = webContents.getAllWebContents();
+      const wc = allWC.find(w => w.id === webContentsId);
+
+      if (!wc || wc.isDestroyed()) {
+        return { success: false, error: `WebContents ${webContentsId} not found` };
+      }
+
+      // ── 4. Give OS-level focus to the webview ─────────────
+      wc.focus();
+
+      // ── 5. Focus ChatGPT's input element via JS ───────────
+      await wc.executeJavaScript(`
+        (function() {
+          const selectors = [
+            '#prompt-textarea',
+            'div[contenteditable="true"]',
+            '.ProseMirror',
+            'textarea[tabindex]',
+            'textarea'
+          ];
+          for (const sel of selectors) {
+            const el = document.querySelector(sel);
+            if (el) { el.focus(); el.click(); return sel; }
+          }
+          return null;
+        })();
+      `);
+
+      // Allow focus to settle before sending keyboard event
+      await new Promise(r => setTimeout(r, 150));
+
+      // ── 6. Send real Ctrl+V keyboard events ───────────────
+      wc.sendInputEvent({ type: 'keyDown', keyCode: 'V', modifiers: ['control'] });
+      wc.sendInputEvent({ type: 'keyUp',   keyCode: 'V', modifiers: ['control'] });
+      console.log('[SS→Paste] Ctrl+V sent to webContents:', webContentsId);
+
+      return { success: true };
+    } catch (err: any) {
+      console.error('[SS→Paste] Error:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ─── CHATGPT AUDIO-LISTEN MODE ───────────────────────────────
+  // Receives raw WebM audio chunks from ChatGPTPanel, transcribes them,
+  // and pushes the transcript back to the renderer via 'chatgpt:transcript'.
+  // Completely independent from the main audio:chunk pipeline.
+
+  ipcMain.on('chatgpt:audio-chunk', async (_event, audioBuffer: ArrayBuffer) => {
+    const buffer = Buffer.from(audioBuffer);
+    if (buffer.length < 500) return;
+
+    // Prevent parallel transcriptions (one at a time)
+    if (isChatGptTranscribing) {
+      console.log('[ChatGPT Audio] Busy — skipping chunk');
+      return;
+    }
+    isChatGptTranscribing = true;
+
+    try {
+      const apiKey = getApiKey();
+      if (!apiKey) {
+        isChatGptTranscribing = false;
+        return;
+      }
+
+      const lang = userPrefs.interviewLanguage || 'en';
+      const transcript = filterUrduScript(await transcribeAudio(buffer, apiKey, lang, userPrefs.transcriptModel));
+
+      if (transcript && transcript.trim().length > 0) {
+        console.log('[ChatGPT Audio] Transcript:', transcript.slice(0, 80));
+        sendToRenderer('chatgpt:transcript', { text: transcript.trim() });
+      }
+    } catch (err: any) {
+      console.error('[ChatGPT Audio] Transcription error:', err);
+    } finally {
+      isChatGptTranscribing = false;
+    }
+  });
+
+  // Insert plain text into a specific webContents (for ChatGPT input).
+  // Uses execCommand('insertText') which works with contenteditable editors.
+  ipcMain.handle('chatgpt:insert-text', async (_event, payload: { webContentsId: number; text: string }) => {
+    try {
+      const { webContentsId, text } = payload;
+      const wc = webContents.getAllWebContents().find(w => w.id === webContentsId);
+      if (!wc || wc.isDestroyed()) return false;
+
+      wc.focus();
+
+      // Find and focus the ChatGPT input, then insert the text
+      await wc.executeJavaScript(`
+        (function(txt) {
+          const selectors = [
+            '#prompt-textarea',
+            'div[contenteditable="true"]',
+            '.ProseMirror',
+            'textarea[tabindex]',
+            'textarea'
+          ];
+          for (const sel of selectors) {
+            const el = document.querySelector(sel);
+            if (el) {
+              el.focus();
+              // execCommand works with contenteditable and triggers React synthetic events
+              if (document.execCommand('insertText', false, txt)) return true;
+              // Fallback: dispatch a paste ClipboardEvent with the text
+              const dt = new DataTransfer();
+              dt.setData('text/plain', txt);
+              el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true }));
+              return true;
+            }
+          }
+          return false;
+        })(${JSON.stringify(text)});
+      `);
+
+      return true;
+    } catch (err: any) {
+      console.error('[ChatGPT Insert Text]', err);
+      return false;
     }
   });
 

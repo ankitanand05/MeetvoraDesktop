@@ -88,6 +88,21 @@
   --syn-default: #a0aec0;
 }
 
+/* ─── ChatGPT Panel ───────────────────────────────────────── */
+.cgpt-panel        { background: var(--glass-bg-strong); }
+.cgpt-topbar       { border-bottom: 1px solid var(--glass-border); background: var(--glass-bg-strong); }
+.cgpt-muted        { color: var(--text-muted); }
+
+.cgpt-nav-btn      { color: var(--text-muted); transition: color 0.15s; }
+.cgpt-nav-btn:hover { color: var(--text-secondary); }
+
+.cgpt-close-btn      { color: var(--text-muted); transition: color 0.15s; }
+.cgpt-close-btn:hover { color: #ef4444; }
+
+/* SS (screenshot) button — idle state uses CSS vars; ok/err states use Tailwind overrides */
+.cgpt-ss-btn         { color: var(--text-muted); border-color: var(--glass-border); }
+.cgpt-ss-btn:hover:not(:disabled) { color: var(--text-secondary); }
+
 /* ─── Base Styles ──────────────────────────────────────────── */
 @layer base {
   * {

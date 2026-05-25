@@ -60,6 +60,31 @@ const electronAPI = {
     ipcRenderer.send('screenshot:capture');
   },
 
+  captureScreenshotToClipboard: (): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('screenshot:to-clipboard'),
+
+  screenshotPasteToWebview: (webContentsId: number): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('screenshot:paste-to-webview', webContentsId),
+
+  /* ─── ChatGPT Audio-Listen ────────────────────────────── */
+
+  /** Send a raw WebM audio chunk for transcription (ChatGPT listen mode) */
+  sendChatGptAudioChunk: (buffer: ArrayBuffer): void => {
+    if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 500) return;
+    ipcRenderer.send('chatgpt:audio-chunk', buffer);
+  },
+
+  /** Insert plain text into the focused element of a webview */
+  insertTextToWebview: (webContentsId: number, text: string): Promise<boolean> =>
+    ipcRenderer.invoke('chatgpt:insert-text', { webContentsId, text }),
+
+  /** Subscribe to transcripts produced by ChatGPT listen mode */
+  onChatGptTranscript: (callback: (data: { text: string }) => void) => {
+    const handler = (_: unknown, data: { text: string }) => callback(data);
+    ipcRenderer.on('chatgpt:transcript', handler);
+    return () => ipcRenderer.removeListener('chatgpt:transcript', handler);
+  },
+
   /* ─── Context ─────────────────────────────── */
 
   setInterviewContext: (data: { profile: string; jobDescription: string }): Promise<boolean> =>

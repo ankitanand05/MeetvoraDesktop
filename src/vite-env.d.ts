@@ -20,6 +20,13 @@ interface ElectronAPI {
   sendVoiceQuestion: (buffer: ArrayBuffer) => void;
   sendTextQuestion: (question: string) => void;
   captureScreenshot: () => void;
+  captureScreenshotToClipboard: () => Promise<{ success: boolean; error?: string }>;
+  screenshotPasteToWebview: (webContentsId: number) => Promise<{ success: boolean; error?: string }>;
+
+  // ChatGPT audio-listen mode
+  sendChatGptAudioChunk: (buffer: ArrayBuffer) => void;
+  insertTextToWebview: (webContentsId: number, text: string) => Promise<boolean>;
+  onChatGptTranscript: (callback: (data: { text: string }) => void) => () => void;
   setInterviewContext: (data: { profile: string; jobDescription: string }) => Promise<boolean>;
   clearInterviewContext: () => Promise<boolean>;
 

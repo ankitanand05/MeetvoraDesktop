@@ -1,9 +1,10 @@
 /**
- * ChatGPTPanel — Embedded ChatGPT webview inside the stealth-protected window.
- * Uses Electron's <webview> tag so the content inherits setContentProtection.
+ * ChatGPTPanel — Embedded ChatGPT webview with:
+ *  • SS button  — capture screen → paste image into chat
+ *  • Live button — listen to system audio → auto-type transcript into chat
  */
 
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { useTheme } from '../hooks/useTheme';
 
 interface ChatGPTPanelProps {
@@ -11,94 +12,303 @@ interface ChatGPTPanelProps {
 }
 
 const ChatGPTPanel: React.FC<ChatGPTPanelProps> = ({ onClose }) => {
-  const { isDark } = useTheme();
+  useTheme();
   const webviewRef = useRef<HTMLElement>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [url, setUrl] = useState('https://chatgpt.com');
+  const [isLoading, setIsLoading]         = useState(true);
+  const [url]                             = useState('https://chatgpt.com');
 
+  // ── SS (screenshot-to-chat) state ──────────────────────────
+  const [isCapturing, setIsCapturing]     = useState(false);
+  const [captureStatus, setCaptureStatus] = useState<'idle' | 'ok' | 'err'>('idle');
+
+  // ── Live audio-listen state ─────────────────────────────────
+  const [isListening, setIsListening]     = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false); // flicker when chunk is being processed
+  const isListeningRef  = useRef(false);   // mutable flag that survives re-renders
+  const audioStreamRef  = useRef<MediaStream | null>(null);
+
+  /* ── Webview loading events ──────────────────────────────── */
   useEffect(() => {
     const wv = webviewRef.current as any;
     if (!wv) return;
-
-    const onStartLoad = () => setIsLoading(true);
-    const onStopLoad = () => setIsLoading(false);
-
-    wv.addEventListener('did-start-loading', onStartLoad);
-    wv.addEventListener('did-stop-loading', onStopLoad);
-
+    const onStart = () => setIsLoading(true);
+    const onStop  = () => setIsLoading(false);
+    wv.addEventListener('did-start-loading', onStart);
+    wv.addEventListener('did-stop-loading',  onStop);
     return () => {
-      wv.removeEventListener('did-start-loading', onStartLoad);
-      wv.removeEventListener('did-stop-loading', onStopLoad);
+      wv.removeEventListener('did-start-loading', onStart);
+      wv.removeEventListener('did-stop-loading',  onStop);
     };
   }, []);
 
-  const handleBack = () => {
+  /* ── Subscribe to transcripts from main process ─────────── */
+  useEffect(() => {
+    const unsub = window.electronAPI.onChatGptTranscript(async ({ text }) => {
+      const wv = webviewRef.current as any;
+      if (!wv || !text) return;
+      setIsTranscribing(true);
+      try {
+        const wcId: number = wv.getWebContentsId();
+        // Append transcript + space so next chunk doesn't merge with previous
+        await window.electronAPI.insertTextToWebview(wcId, text + ' ');
+      } finally {
+        setIsTranscribing(false);
+      }
+    });
+    return unsub;
+  }, []);
+
+  /* ── Cleanup audio on unmount / panel close ─────────────── */
+  useEffect(() => {
+    return () => {
+      isListeningRef.current = false;
+      if (audioStreamRef.current) {
+        audioStreamRef.current.getTracks().forEach(t => t.stop());
+        audioStreamRef.current = null;
+      }
+    };
+  }, []);
+
+  /* ── Nav helpers ─────────────────────────────────────────── */
+  const handleBack    = () => { const wv = webviewRef.current as any; if (wv?.canGoBack())    wv.goBack(); };
+  const handleForward = () => { const wv = webviewRef.current as any; if (wv?.canGoForward()) wv.goForward(); };
+  const handleReload  = () => { const wv = webviewRef.current as any; wv?.reload(); };
+
+  /* ── SS: capture screen → paste image into chat ─────────── */
+  const handleScreenshotPaste = async () => {
     const wv = webviewRef.current as any;
-    if (wv?.canGoBack()) wv.goBack();
+    if (!wv || isCapturing) return;
+    setIsCapturing(true);
+    setCaptureStatus('idle');
+    try {
+      const wcId: number = wv.getWebContentsId();
+      const result = await window.electronAPI.screenshotPasteToWebview(wcId);
+      setCaptureStatus(result.success ? 'ok' : 'err');
+    } catch {
+      setCaptureStatus('err');
+    } finally {
+      setIsCapturing(false);
+      setTimeout(() => setCaptureStatus('idle'), 1300);
+    }
   };
 
-  const handleForward = () => {
-    const wv = webviewRef.current as any;
-    if (wv?.canGoForward()) wv.goForward();
+  /* ── Live: one recording cycle → WAV blob → transcribe ─── */
+  const runRecordingCycle = useCallback(async (stream: MediaStream): Promise<void> => {
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus' : 'audio/webm';
+
+    // Extract only audio tracks
+    const audioStream = new MediaStream(stream.getAudioTracks());
+
+    while (isListeningRef.current) {
+      try {
+        // Record a clean 5-second clip (stop-and-restart for a valid standalone file)
+        const blob = await new Promise<Blob>((resolve, reject) => {
+          const chunks: Blob[] = [];
+          const recorder = new MediaRecorder(audioStream, { mimeType });
+          recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+          recorder.onerror = () => reject(new Error('MediaRecorder error'));
+          recorder.onstop = () => resolve(new Blob(chunks, { type: mimeType }));
+          recorder.start();
+          // Stop after 5 s (or immediately if listening stopped mid-cycle)
+          setTimeout(() => {
+            if (recorder.state !== 'inactive') recorder.stop();
+          }, 5000);
+        });
+
+        if (blob.size > 500 && isListeningRef.current) {
+          const buffer = await blob.arrayBuffer();
+          window.electronAPI.sendChatGptAudioChunk(buffer);
+        }
+      } catch (err) {
+        console.error('[ChatGPT Live] Cycle error:', err);
+        // Short pause before retrying to avoid tight error loops
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
+  }, []);
+
+  /* ── Live: start ─────────────────────────────────────────── */
+  const handleLiveStart = async () => {
+    if (isListening) return;
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        audio: true,
+        video: true, // required by browser API — we only use the audio track
+      });
+
+      if (!stream.getAudioTracks().length) {
+        console.error('[ChatGPT Live] No audio track — did you check "Share system audio"?');
+        stream.getTracks().forEach(t => t.stop());
+        return;
+      }
+
+      audioStreamRef.current  = stream;
+      isListeningRef.current  = true;
+      setIsListening(true);
+
+      // When the user stops the screen-share from the browser UI, clean up too
+      stream.getAudioTracks()[0].onended = () => handleLiveStop();
+
+      // Kick off the recording loop (non-blocking)
+      runRecordingCycle(stream).catch(err => {
+        console.error('[ChatGPT Live] Recording loop crashed:', err);
+        handleLiveStop();
+      });
+    } catch (err: any) {
+      console.error('[ChatGPT Live] getDisplayMedia error:', err);
+    }
   };
 
-  const handleReload = () => {
-    const wv = webviewRef.current as any;
-    wv?.reload();
-  };
+  /* ── Live: stop ──────────────────────────────────────────── */
+  const handleLiveStop = useCallback(() => {
+    isListeningRef.current = false;
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach(t => t.stop());
+      audioStreamRef.current = null;
+    }
+    setIsListening(false);
+    setIsTranscribing(false);
+  }, []);
+
+  /* ── Derived style helpers ───────────────────────────────── */
+  const ssBtnClass = [
+    'flex items-center gap-0.5 px-1.5 h-6 rounded transition-all select-none border bg-transparent',
+    captureStatus === 'ok'  ? 'text-cyan-400 border-cyan-400' :
+    captureStatus === 'err' ? 'text-red-500  border-red-500'  :
+    'cgpt-ss-btn',
+    isCapturing ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer',
+  ].join(' ');
 
   return (
-    <div className="absolute inset-0 z-50 flex flex-col" style={{ background: 'var(--glass-bg-strong)' }}>
-      {/* Top bar */}
-      <div
-        className="flex items-center gap-1 px-2 py-1 shrink-0"
-        style={{ borderBottom: '1px solid var(--glass-border)', background: 'var(--glass-bg-strong)' }}
-      >
+    <div className="absolute inset-0 z-50 flex flex-col cgpt-panel">
+
+      {/* ── Top bar ──────────────────────────────────────────── */}
+      <div className="flex items-center gap-1 px-2 py-1 shrink-0 cgpt-topbar">
+
+        {/* SS button */}
+        <button
+          type="button"
+          onClick={handleScreenshotPaste}
+          disabled={isCapturing}
+          title="Take screenshot & paste into ChatGPT chat"
+          aria-label="Screenshot to ChatGPT"
+          className={ssBtnClass}
+        >
+          {isCapturing ? (
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2.5" className="animate-spin">
+              <circle cx="12" cy="12" r="9" strokeOpacity="0.25" />
+              <path d="M12 3a9 9 0 0 1 9 9" />
+            </svg>
+          ) : captureStatus === 'ok' ? (
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          ) : captureStatus === 'err' ? (
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          ) : (
+            /* camera */
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+              <circle cx="12" cy="13" r="4" />
+            </svg>
+          )}
+          <span className="text-[8px] font-semibold uppercase tracking-wide leading-none">SS</span>
+        </button>
+
+        {/* Live audio-listen button */}
+        {!isListening ? (
+          <button
+            type="button"
+            onClick={handleLiveStart}
+            title="Start listening to system audio — transcript auto-types into ChatGPT"
+            aria-label="Start live audio listen"
+            className="flex items-center gap-0.5 px-1.5 h-6 rounded border bg-transparent cursor-pointer transition-all select-none cgpt-ss-btn"
+          >
+            {/* mic icon */}
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+              <line x1="12" y1="19" x2="12" y2="23" />
+            </svg>
+            <span className="text-[8px] font-semibold uppercase tracking-wide leading-none">Live</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={handleLiveStop}
+            title="Stop live audio listen"
+            aria-label="Stop live audio listen"
+            className="relative flex items-center gap-0.5 px-1.5 h-6 rounded border bg-transparent cursor-pointer transition-all select-none text-red-500 border-red-500"
+          >
+            {/* pulsing dot */}
+            <span className="relative flex h-2 w-2 shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
+            </span>
+            <span className="text-[8px] font-semibold uppercase tracking-wide leading-none">
+              {isTranscribing ? '…' : 'Stop'}
+            </span>
+          </button>
+        )}
+
         {/* Nav buttons */}
-        <button onClick={handleBack} className="w-6 h-6 flex items-center justify-center rounded transition-colors" style={{ color: 'var(--text-muted)' }}
-          onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-secondary)'; }}
-          onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-muted)'; }}
+        <button type="button" onClick={handleBack}
+          className="w-6 h-6 flex items-center justify-center rounded transition-colors cgpt-nav-btn"
           aria-label="Back">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="15 18 9 12 15 6" />
+          </svg>
         </button>
-        <button onClick={handleForward} className="w-6 h-6 flex items-center justify-center rounded transition-colors" style={{ color: 'var(--text-muted)' }}
-          onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-secondary)'; }}
-          onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-muted)'; }}
+
+        <button type="button" onClick={handleForward}
+          className="w-6 h-6 flex items-center justify-center rounded transition-colors cgpt-nav-btn"
           aria-label="Forward">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
         </button>
-        <button onClick={handleReload} className="w-6 h-6 flex items-center justify-center rounded transition-colors" style={{ color: 'var(--text-muted)' }}
-          onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-secondary)'; }}
-          onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-muted)'; }}
+
+        <button type="button" onClick={handleReload}
+          className="w-6 h-6 flex items-center justify-center rounded transition-colors cgpt-nav-btn"
           aria-label="Reload">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="23 4 23 10 17 10" />
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+          </svg>
         </button>
 
         {/* Loading indicator */}
         {isLoading && (
           <div className="flex items-center gap-1 ml-1">
             <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-            <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>Loading…</span>
+            <span className="text-[9px] cgpt-muted">Loading…</span>
           </div>
         )}
 
         <div className="flex-1" />
 
         {/* Label */}
-        <span className="text-[9px] font-semibold uppercase tracking-wider mr-1" style={{ color: 'var(--text-muted)' }}>
+        <span className="text-[9px] font-semibold uppercase tracking-wider mr-1 cgpt-muted">
           ChatGPT
         </span>
 
-        {/* Close button */}
-        <button
-          onClick={onClose}
-          className="w-6 h-6 flex items-center justify-center rounded transition-colors"
-          style={{ color: 'var(--text-muted)' }}
-          onMouseEnter={e => { e.currentTarget.style.color = '#ef4444'; }}
-          onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-muted)'; }}
-          aria-label="Close ChatGPT"
-        >
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        {/* Close */}
+        <button type="button" onClick={onClose}
+          className="w-6 h-6 flex items-center justify-center rounded transition-colors cgpt-close-btn"
+          aria-label="Close ChatGPT">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
           </svg>
         </button>
@@ -109,8 +319,7 @@ const ChatGPTPanel: React.FC<ChatGPTPanelProps> = ({ onClose }) => {
       <webview
         ref={webviewRef as any}
         src={url}
-        className="flex-1"
-        style={{ width: '100%', height: '100%' }}
+        className="flex-1 w-full h-full"
         /* @ts-ignore */
         allowpopups="true"
       />
