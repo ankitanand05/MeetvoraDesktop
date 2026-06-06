@@ -9,6 +9,7 @@ import { useIPC } from './hooks/useIPC';
 import { ThemeProvider, useTheme } from './hooks/useTheme';
 import { useSettings } from './hooks/useSettings';
 import ChatGPTPanel from './components/ChatGPTPanel';
+import GhostCursor from './components/GhostCursor';
 import ErrorBoundary from './components/ErrorBoundary';
 
 /** Inner component that reads the theme */
@@ -32,29 +33,35 @@ const AppInner: React.FC = () => {
     window.electronAPI.hasApiKey().then(exists => setHasApiKey(exists)).catch(() => setHasApiKey(false));
   }, []);
 
-  // Apply transparency/opacity based on settings
+  // Ghost cursor — two side-effects that must always stay in sync:
+  //   1. Inject cursor:none CSS so the system cursor is hidden on screen.
+  //   2. Tell the main process to setContentProtection(true) so the DOM cursor
+  //      elements are invisible to screen-sharing / recording tools (they're
+  //      still fully visible on the user's own display).
   useEffect(() => {
-    const root = document.documentElement;
-    if (settings.seeThrough) {
-      // Full see-through: nearly invisible
-      root.style.setProperty('--glass-bg', 'rgba(0,0,0,0.02)');
-      root.style.setProperty('--glass-bg-strong', 'rgba(0,0,0,0.03)');
-      root.style.setProperty('--glass-bg-subtle', 'rgba(0,0,0,0.01)');
-    } else {
-      const opacity = settings.transparencyLevel / 100;
-      const opacityStrong = Math.min(opacity + 0.1, 0.95);
-      const opacitySubtle = Math.max(opacity - 0.1, 0.05);
-      if (isDark) {
-        root.style.setProperty('--glass-bg', `rgba(15,15,20,${opacity})`);
-        root.style.setProperty('--glass-bg-strong', `rgba(15,15,20,${opacityStrong})`);
-        root.style.setProperty('--glass-bg-subtle', `rgba(15,15,20,${opacitySubtle})`);
-      } else {
-        root.style.setProperty('--glass-bg', `rgba(245,245,248,${opacity})`);
-        root.style.setProperty('--glass-bg-strong', `rgba(245,245,248,${opacityStrong})`);
-        root.style.setProperty('--glass-bg-subtle', `rgba(245,245,248,${opacitySubtle})`);
+    // ── CSS: hide system cursor ──────────────────────────────────────────────
+    // Dynamic <style> inside @layer base beats the Tailwind reset's
+    // `* { cursor: default !important }` because within the same layer the
+    // LATER declaration wins, even for !important.
+    const STYLE_ID = 'gc-cursor-override';
+    if (settings.ghostCursor) {
+      if (!document.getElementById(STYLE_ID)) {
+        const el = document.createElement('style');
+        el.id = STYLE_ID;
+        el.textContent = '@layer base { *, *::before, *::after { cursor: none !important; } }';
+        document.head.appendChild(el);
       }
+    } else {
+      document.getElementById(STYLE_ID)?.remove();
     }
-  }, [settings.seeThrough, settings.transparencyLevel, isDark]);
+
+    // ── IPC: enable / disable content protection ─────────────────────────────
+    window.electronAPI.setGhostCursorProtection(settings.ghostCursor)
+      .catch(() => { /* non-fatal — cursor still works, just not protection-gated */ });
+
+    return () => { document.getElementById(STYLE_ID)?.remove(); };
+  }, [settings.ghostCursor]);
+
 
   /** Interview setup complete — enter session (no going back) */
   const handleInterviewSetupComplete = async (profile: string, jobDescription: string) => {
@@ -113,6 +120,10 @@ const AppInner: React.FC = () => {
           e.preventDefault();
           window.electronAPI.positionWindow('center-top');
           return;
+        case 'B':
+          e.preventDefault();
+          window.electronAPI.positionWindow('bottom');
+          return;
         case 'ESCAPE':
           e.preventDefault();
           if (showSettings) {
@@ -131,6 +142,20 @@ const AppInner: React.FC = () => {
           e.preventDefault();
           setShowChatGPT(prev => !prev);
           return;
+        case 'S': // Shrink / restore window — but let Ctrl+Shift+S fall through to Start/Stop
+          if (!e.ctrlKey && !e.altKey && !e.metaKey) {
+            e.preventDefault();
+            window.electronAPI.shrinkWindow();
+            return;
+          }
+          break; // Ctrl+Shift+S handled in the modifier section below
+        case 'M': // Medium window size / restore
+          if (!e.ctrlKey && !e.altKey && !e.metaKey) {
+            e.preventDefault();
+            window.electronAPI.mediumWindow();
+            return;
+          }
+          break;
       }
 
       // ── Number keys 1-5: select follow-up suggestion ──
@@ -212,20 +237,8 @@ const AppInner: React.FC = () => {
     return () => window.removeEventListener('keydown', handler);
   }, [screen, session.status, session.suggestions, settings.spacebarMode, showSettings, session.isAlwaysOnTop]);
 
-  // ── Setup screen (interview only — once entered session, no going back) ──
-  if (screen === 'setup') {
-    return (
-      <SetupScreen
-        onComplete={handleInterviewSetupComplete}
-        onBack={minHandler}
-        onMinimize={minHandler}
-        onClose={closeHandler}
-      />
-    );
-  }
-
   // ── Main copilot view ──
-  return (
+  const mainView = (
     <div
       className="relative flex flex-col h-screen overflow-hidden rounded-xl backdrop-blur-xl transition-colors duration-300"
       style={{
@@ -305,6 +318,27 @@ const AppInner: React.FC = () => {
         <ChatGPTPanel onClose={() => setShowChatGPT(false)} />
       )}
     </div>
+  );
+
+  // Ghost cursor is rendered via createPortal into document.body — it must be
+  // mounted on EVERY screen (setup + main) so it's visible from the very first
+  // frame the app opens.
+  return (
+    <>
+      {screen === 'setup' ? (
+        <SetupScreen
+          onComplete={handleInterviewSetupComplete}
+          onBack={minHandler}
+          onMinimize={minHandler}
+          onClose={closeHandler}
+        />
+      ) : (
+        mainView
+      )}
+
+      {/* Always-on ghost cursor — portal renders into <body>, works on all screens */}
+      {settings.ghostCursor && <GhostCursor />}
+    </>
   );
 };
 

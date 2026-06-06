@@ -27,17 +27,59 @@ const ChatGPTPanel: React.FC<ChatGPTPanelProps> = ({ onClose }) => {
   const isListeningRef  = useRef(false);   // mutable flag that survives re-renders
   const audioStreamRef  = useRef<MediaStream | null>(null);
 
-  /* ── Webview loading events ──────────────────────────────── */
+  /* ── Webview loading events + shortcut forwarding ───────── */
   useEffect(() => {
     const wv = webviewRef.current as any;
     if (!wv) return;
     const onStart = () => setIsLoading(true);
-    const onStop  = () => setIsLoading(false);
-    wv.addEventListener('did-start-loading', onStart);
-    wv.addEventListener('did-stop-loading',  onStop);
+    const onStop  = () => {
+      setIsLoading(false);
+      // Hide the real system cursor inside the webview — ghost cursor handles the
+      // visual, and is invisible to screen-capture tools via content protection.
+      wv.insertCSS('*, *::before, *::after { cursor: none !important; }').catch(() => {});
+    };
+    // Forward keyboard shortcuts from the webview to the parent renderer.
+    // Key events consumed by the webview never reach App.tsx's handler otherwise.
+    const SINGLE_KEY_SHORTCUTS = new Set(['f', 'r', 'l', 'c', 'b', 'g', 'w', 's', 'm']);
+    const onKeyInWebview = (event: any) => {
+      const input = event.input;
+      if (!input || input.type !== 'keyDown') return;
+      const hasCtrl  = !!input.control;
+      const hasShift = !!input.shift;
+      const hasAlt   = !!input.alt;
+      const hasMeta  = !!input.meta;
+
+      // ── Ctrl+Shift combos — always safe to forward (no typing conflict) ──
+      if (hasCtrl && hasShift) {
+        window.dispatchEvent(new KeyboardEvent('keydown', {
+          key: input.key, ctrlKey: true, shiftKey: true,
+          altKey: hasAlt, metaKey: hasMeta, bubbles: true,
+        }));
+        return;
+      }
+
+      // ── Single-key position/mode shortcuts — only when no text input focused ──
+      if (!hasCtrl && !hasShift && !hasAlt && !hasMeta &&
+          SINGLE_KEY_SHORTCUTS.has(input.key?.toLowerCase())) {
+        (wv.executeJavaScript(
+          `!!(document.activeElement && document.activeElement.matches('input,textarea,[contenteditable],[contenteditable] *'))`
+        ) as Promise<boolean>).then((isInputFocused: boolean) => {
+          if (!isInputFocused) {
+            window.dispatchEvent(new KeyboardEvent('keydown', {
+              key: input.key, ctrlKey: false, shiftKey: false,
+              altKey: false, metaKey: false, bubbles: true,
+            }));
+          }
+        }).catch(() => {});
+      }
+    };
+    wv.addEventListener('did-start-loading',  onStart);
+    wv.addEventListener('did-stop-loading',   onStop);
+    wv.addEventListener('before-input-event', onKeyInWebview);
     return () => {
-      wv.removeEventListener('did-start-loading', onStart);
-      wv.removeEventListener('did-stop-loading',  onStop);
+      wv.removeEventListener('did-start-loading',  onStart);
+      wv.removeEventListener('did-stop-loading',   onStop);
+      wv.removeEventListener('before-input-event', onKeyInWebview);
     };
   }, []);
 
@@ -128,27 +170,47 @@ const ChatGPTPanel: React.FC<ChatGPTPanelProps> = ({ onClose }) => {
     }
   }, []);
 
-  /* ── Live: start ─────────────────────────────────────────── */
+  /* ── Live: start / restart (also called on device-change) ── */
   const handleLiveStart = async () => {
     if (isListening) return;
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        audio: true,
-        video: true, // required by browser API — we only use the audio track
+        // Disable processing so raw loopback audio is captured correctly
+        // with any output device (speakers OR headphones)
+        audio: {
+          echoCancellation:   false,
+          noiseSuppression:   false,
+          autoGainControl:    false,
+          sampleRate:         { ideal: 44100 },
+          channelCount:       { ideal: 2 },
+        },
+        video: true, // required by the API — video tracks are stopped immediately
       });
 
+      // Drop video tracks straight away — we only need audio
+      stream.getVideoTracks().forEach(t => t.stop());
+
       if (!stream.getAudioTracks().length) {
-        console.error('[ChatGPT Live] No audio track — did you check "Share system audio"?');
+        console.error('[ChatGPT Live] No audio track — make sure "Share system audio" is checked');
         stream.getTracks().forEach(t => t.stop());
         return;
       }
 
-      audioStreamRef.current  = stream;
-      isListeningRef.current  = true;
+      audioStreamRef.current = stream;
+      isListeningRef.current = true;
       setIsListening(true);
 
-      // When the user stops the screen-share from the browser UI, clean up too
-      stream.getAudioTracks()[0].onended = () => handleLiveStop();
+      // When the audio device changes (e.g. headphones plugged in/out),
+      // Windows kills the capture track. Auto-restart instead of stopping.
+      stream.getAudioTracks()[0].onended = () => {
+        console.log('[ChatGPT Live] Audio track ended — device changed, restarting…');
+        // Clean up old stream then re-acquire
+        stream.getTracks().forEach(t => t.stop());
+        audioStreamRef.current = null;
+        isListeningRef.current = false;
+        setIsListening(false);          // briefly reset UI
+        setTimeout(() => handleLiveStart(), 800); // re-trigger after OS settles
+      };
 
       // Kick off the recording loop (non-blocking)
       runRecordingCycle(stream).catch(err => {
@@ -186,80 +248,7 @@ const ChatGPTPanel: React.FC<ChatGPTPanelProps> = ({ onClose }) => {
       {/* ── Top bar ──────────────────────────────────────────── */}
       <div className="flex items-center gap-1 px-2 py-1 shrink-0 cgpt-topbar">
 
-        {/* SS button */}
-        <button
-          type="button"
-          onClick={handleScreenshotPaste}
-          disabled={isCapturing}
-          title="Take screenshot & paste into ChatGPT chat"
-          aria-label="Screenshot to ChatGPT"
-          className={ssBtnClass}
-        >
-          {isCapturing ? (
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2.5" className="animate-spin">
-              <circle cx="12" cy="12" r="9" strokeOpacity="0.25" />
-              <path d="M12 3a9 9 0 0 1 9 9" />
-            </svg>
-          ) : captureStatus === 'ok' ? (
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="20 6 9 17 4 12" />
-            </svg>
-          ) : captureStatus === 'err' ? (
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          ) : (
-            /* camera */
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-              <circle cx="12" cy="13" r="4" />
-            </svg>
-          )}
-          <span className="text-[8px] font-semibold uppercase tracking-wide leading-none">SS</span>
-        </button>
-
-        {/* Live audio-listen button */}
-        {!isListening ? (
-          <button
-            type="button"
-            onClick={handleLiveStart}
-            title="Start listening to system audio — transcript auto-types into ChatGPT"
-            aria-label="Start live audio listen"
-            className="flex items-center gap-0.5 px-1.5 h-6 rounded border bg-transparent cursor-pointer transition-all select-none cgpt-ss-btn"
-          >
-            {/* mic icon */}
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-              <line x1="12" y1="19" x2="12" y2="23" />
-            </svg>
-            <span className="text-[8px] font-semibold uppercase tracking-wide leading-none">Live</span>
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={handleLiveStop}
-            title="Stop live audio listen"
-            aria-label="Stop live audio listen"
-            className="relative flex items-center gap-0.5 px-1.5 h-6 rounded border bg-transparent cursor-pointer transition-all select-none text-red-500 border-red-500"
-          >
-            {/* pulsing dot */}
-            <span className="relative flex h-2 w-2 shrink-0">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
-            </span>
-            <span className="text-[8px] font-semibold uppercase tracking-wide leading-none">
-              {isTranscribing ? '…' : 'Stop'}
-            </span>
-          </button>
-        )}
-
-        {/* Nav buttons */}
+        {/* ── LEFT: Nav buttons + loading ────────────────────── */}
         <button type="button" onClick={handleBack}
           className="w-6 h-6 flex items-center justify-center rounded transition-colors cgpt-nav-btn"
           aria-label="Back">
@@ -288,7 +277,6 @@ const ChatGPTPanel: React.FC<ChatGPTPanelProps> = ({ onClose }) => {
           </svg>
         </button>
 
-        {/* Loading indicator */}
         {isLoading && (
           <div className="flex items-center gap-1 ml-1">
             <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
@@ -296,14 +284,87 @@ const ChatGPTPanel: React.FC<ChatGPTPanelProps> = ({ onClose }) => {
           </div>
         )}
 
+        {/* ── CENTRE spacer ──────────────────────────────────── */}
         <div className="flex-1" />
 
-        {/* Label */}
+        {/* ── CENTRE: SS + Live/mike buttons ─────────────────── */}
+        <button
+          type="button"
+          onClick={handleScreenshotPaste}
+          disabled={isCapturing}
+          title="Take screenshot & paste into ChatGPT chat"
+          aria-label="Screenshot to ChatGPT"
+          className={ssBtnClass}
+        >
+          {isCapturing ? (
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2.5" className="animate-spin">
+              <circle cx="12" cy="12" r="9" strokeOpacity="0.25" />
+              <path d="M12 3a9 9 0 0 1 9 9" />
+            </svg>
+          ) : captureStatus === 'ok' ? (
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          ) : captureStatus === 'err' ? (
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          ) : (
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+              <circle cx="12" cy="13" r="4" />
+            </svg>
+          )}
+          <span className="text-[8px] font-semibold uppercase tracking-wide leading-none">SS</span>
+        </button>
+
+        {/* Live / Stop (mike) button */}
+        {!isListening ? (
+          <button
+            type="button"
+            onClick={handleLiveStart}
+            title="Start listening to system audio — transcript auto-types into ChatGPT"
+            aria-label="Start live audio listen"
+            className="flex items-center gap-0.5 px-1.5 h-6 rounded border bg-transparent cursor-pointer transition-all select-none cgpt-ss-btn"
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+              <line x1="12" y1="19" x2="12" y2="23" />
+            </svg>
+            <span className="text-[8px] font-semibold uppercase tracking-wide leading-none">Live</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={handleLiveStop}
+            title="Stop live audio listen"
+            aria-label="Stop live audio listen"
+            className="relative flex items-center gap-0.5 px-1.5 h-6 rounded border bg-transparent cursor-pointer transition-all select-none text-red-500 border-red-500"
+          >
+            <span className="relative flex h-2 w-2 shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
+            </span>
+            <span className="text-[8px] font-semibold uppercase tracking-wide leading-none">
+              {isTranscribing ? '…' : 'Stop'}
+            </span>
+          </button>
+        )}
+
+        {/* ── RIGHT spacer ───────────────────────────────────── */}
+        <div className="flex-1" />
+
+        {/* ── RIGHT: label + close ───────────────────────────── */}
         <span className="text-[9px] font-semibold uppercase tracking-wider mr-1 cgpt-muted">
           ChatGPT
         </span>
 
-        {/* Close */}
         <button type="button" onClick={onClose}
           className="w-6 h-6 flex items-center justify-center rounded transition-colors cgpt-close-btn"
           aria-label="Close ChatGPT">

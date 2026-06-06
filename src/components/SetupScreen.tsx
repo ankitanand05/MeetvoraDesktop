@@ -16,7 +16,9 @@ interface SetupScreenProps {
   onClose: () => void;
 }
 
-const SetupScreen: React.FC<SetupScreenProps> = ({ onComplete, onBack, onMinimize, onClose }) => {
+const SetupScreen: React.FC<SetupScreenProps> = ({
+  onComplete, onBack, onMinimize, onClose,
+}) => {
   const [activeTab, setActiveTab] = useState<'profile' | 'jd'>('profile');
   const [profile, setProfile] = useState('');
   const [jobDescription, setJobDescription] = useState('');
@@ -75,7 +77,8 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onComplete, onBack, onMinimiz
           </div>
         </div>
 
-        <div className="titlebar-no-drag flex items-center gap-0.5">
+        <div className="titlebar-no-drag flex items-center gap-1.5">
+
           {/* Theme toggle */}
           <button
             onClick={toggleTheme}
@@ -238,6 +241,12 @@ const SetupScreen: React.FC<SetupScreenProps> = ({ onComplete, onBack, onMinimiz
           </svg>
           Start Interview Assistant
         </button>
+
+        {/* Powered by */}
+        <p className="text-center mt-3 text-[10px] select-none setup-powered-by">
+          ⚡ Powered by{' '}
+          <span className="font-semibold setup-powered-by-name">Ankit Anand</span>
+        </p>
       </div>
     </div>
   );

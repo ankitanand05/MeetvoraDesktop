@@ -85,6 +85,26 @@ const electronAPI = {
     return () => ipcRenderer.removeListener('chatgpt:transcript', handler);
   },
 
+  /**
+   * Ghost cursor — OS-level cursor position streamed from main process at ~60 fps.
+   * Works even when the cursor is over a <webview> (which swallows DOM events).
+   * Coordinates are window-relative DIPs.
+   */
+  onCursorPos: (callback: (pos: { x: number; y: number }) => void) => {
+    const handler = (_: unknown, pos: { x: number; y: number }) => callback(pos);
+    ipcRenderer.on('cursor:pos', handler);
+    return () => ipcRenderer.removeListener('cursor:pos', handler);
+  },
+
+  /**
+   * Tell the main process to enable / disable setContentProtection for the
+   * ghost cursor.  When enabled the window content (including the DOM cursor
+   * elements) is invisible to screen-sharing and recording tools while still
+   * visible on the user's own screen.
+   */
+  setGhostCursorProtection: (enabled: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('window:set-ghost-cursor-protection', enabled),
+
   /* ─── Context ─────────────────────────────── */
 
   setInterviewContext: (data: { profile: string; jobDescription: string }): Promise<boolean> =>
@@ -149,6 +169,12 @@ const electronAPI = {
     ipcRenderer.invoke('settings:load-prefs'),
 
   /* ─── Window ───────────────────────────────── */
+
+  shrinkWindow: (): Promise<boolean> =>
+    ipcRenderer.invoke('window:shrink-toggle'),
+
+  mediumWindow: (): Promise<boolean> =>
+    ipcRenderer.invoke('window:medium-toggle'),
 
   toggleAlwaysOnTop: (): Promise<boolean> =>
     ipcRenderer.invoke('window:toggle-aot'),

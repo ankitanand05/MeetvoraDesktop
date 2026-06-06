@@ -30,12 +30,14 @@ export interface AppSettings {
   audioDeviceId: string;
   /** How spacebar triggers recording */
   spacebarMode: SpacebarMode;
-  /** When true the window is made nearly invisible (for screen-share stealth) */
-  seeThrough: boolean;
-  /** Opacity of UI panels when seeThrough is off — 10 to 95 (%) */
-  transparencyLevel: number;
   /** Font-size class for chat messages */
   chatTextSize: ChatTextSize;
+  /**
+   * Ghost cursor — replaces the system cursor with a DOM-rendered cursor.
+   * The system cursor is hidden (cursor: none) so screen-sharing tools
+   * cannot capture it. Only the DOM element is visible on screen.
+   */
+  ghostCursor: boolean;
 }
 
 /* ────────────────────────────────────────── */
@@ -51,9 +53,8 @@ export const DEFAULTS: AppSettings = {
   interviewLanguage: 'en',
   audioDeviceId: 'default',
   spacebarMode: 'click',
-  seeThrough: false,
-  transparencyLevel: 55,
   chatTextSize: 'normal',
+  ghostCursor: true,
 };
 
 /** Language display name → BCP-47 code */

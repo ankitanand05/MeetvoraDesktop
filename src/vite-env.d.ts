@@ -63,6 +63,8 @@ interface ElectronAPI {
   }>;
 
   // Window controls
+  shrinkWindow: () => Promise<boolean>;
+  mediumWindow: () => Promise<boolean>;
   toggleAlwaysOnTop: () => Promise<boolean>;
   toggleStealth: () => Promise<boolean>;
   positionWindow: (position: string) => void;
@@ -73,6 +75,10 @@ interface ElectronAPI {
   openExternal: (url: string) => Promise<void>;
 
   // Event listeners (Main → Renderer)
+  /** Ghost cursor — OS cursor position streamed from main process (works over webviews) */
+  onCursorPos: (callback: (pos: { x: number; y: number }) => void) => () => void;
+  /** Enable / disable window content-protection for ghost cursor (hides DOM cursor from screen capture) */
+  setGhostCursorProtection: (enabled: boolean) => Promise<boolean>;
   onTranscript: (callback: (data: { text: string; timestamp: string }) => void) => () => void;
   onAIResponseChunk: (callback: (data: { chunk: string; sessionId: string }) => void) => () => void;
   onAIResponseComplete: (callback: (data: { fullText: string; sessionId: string }) => void) => () => void;

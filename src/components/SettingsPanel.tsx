@@ -61,6 +61,7 @@ const Select: React.FC<{
 
 const Toggle: React.FC<{ checked: boolean; onChange: (v: boolean) => void; label?: string }> = ({ checked, onChange, label }) => (
   <button
+    type="button"
     onClick={() => onChange(!checked)}
     aria-label={label ?? (checked ? 'Disable' : 'Enable')}
     aria-pressed={checked}
@@ -176,15 +177,25 @@ function useAudioDevices() {
 /* ──────────────────────────────────────────────────── */
 
 const SHORTCUTS = [
-  { keys: 'Space', action: 'Record voice / get answer', icon: '🎤' },
+  // ── Window position ──
   { keys: 'F', action: 'Fullscreen / Restore', icon: '⛶' },
   { keys: 'R', action: 'Snap to right', icon: '→' },
   { keys: 'L', action: 'Snap to left', icon: '←' },
   { keys: 'C', action: 'Center top', icon: '↑' },
+  { keys: 'B', action: 'Snap to bottom', icon: '↓' },
+  // ── Window size ──
+  { keys: 'S', action: 'Small window (half size) / Restore', icon: '▪' },
+  { keys: 'M', action: 'Medium window (75%) / Restore', icon: '◻' },
+  // ── AI / recording ──
+  { keys: 'Space', action: 'Record voice / get answer', icon: '🎤' },
   { keys: 'G', action: 'Teleprompter mode', icon: '📝' },
+  { keys: 'W', action: 'Toggle ChatGPT panel', icon: '💬' },
+  // ── Navigation ──
   { keys: 'Esc', action: 'Hide / Show window', icon: '👁' },
   { keys: '↑ / ↓', action: 'Scroll chat content', icon: '↕' },
   { keys: '1–5', action: 'Pick follow-up suggestion', icon: '#' },
+  // ── Ctrl+Shift combos ──
+  { keys: 'Ctrl+Shift+`', action: 'Global Show / Hide (anywhere)', icon: '👻' },
   { keys: 'Ctrl+Shift+S', action: 'Start / Stop recording', icon: '▶' },
   { keys: 'Ctrl+Shift+M', action: 'Voice question', icon: '🎙' },
   { keys: 'Ctrl+Shift+T', action: 'Type a question', icon: '✏' },
@@ -192,7 +203,6 @@ const SHORTCUTS = [
   { keys: 'Ctrl+Shift+P', action: 'Screenshot', icon: '📸' },
   { keys: 'Ctrl+Shift+A', action: 'Pin / Unpin on top', icon: '📌' },
   { keys: 'Ctrl+Shift+H', action: 'Stealth mode', icon: '🔒' },
-  { keys: 'Ctrl+Shift+`', action: 'Global Show / Hide', icon: '👻' },
 ];
 
 /* ──────────────────────────────────────────────────── */
@@ -657,67 +667,6 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
         {/* ══ APPEARANCE TAB ══ */}
         {activeTab === 'appearance' && (
           <div>
-            {/* Transparency Mode */}
-            <SectionHeader
-              icon={
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                  <circle cx="12" cy="12" r="3" />
-                </svg>
-              }
-              title="Transparency Mode"
-              desc="Make Meetvora see-through for screen sharing and presentations."
-            />
-
-            <Row>
-              <Label
-                title="See-through Mode"
-                desc="Enable transparency to make Meetvora invisible during screen sharing"
-              />
-              <Toggle
-                checked={settings.seeThrough}
-                onChange={v => update('seeThrough', v)}
-                label="See-through mode"
-              />
-            </Row>
-
-            {settings.seeThrough && (
-              <div className="sp-active-badge flex items-center gap-2 py-2 px-3">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className="sp-active-badge-icon">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-                <span className="sp-active-badge-text">Transparency Mode Active</span>
-              </div>
-            )}
-
-            {/* Opacity slider — visible when NOT in full see-through mode */}
-            {!settings.seeThrough && (
-              <div className="sp-opacity-section py-3">
-                <div className="flex items-center justify-between mb-2">
-                  <Label
-                    title="Window Opacity"
-                    desc="Control how transparent the window panels are"
-                  />
-                  <span className="sp-opacity-value">{settings.transparencyLevel}%</span>
-                </div>
-                <input
-                  type="range"
-                  min={10}
-                  max={95}
-                  value={settings.transparencyLevel}
-                  onChange={e => update('transparencyLevel', parseInt(e.target.value))}
-                  aria-label="Window opacity"
-                  className="sp-range-slider w-full"
-                  /* stylelint-disable-next-line */
-                  ref={el => { if (el) el.style.setProperty('--range-pct', `${settings.transparencyLevel}%`); }}
-                />
-                <div className="flex justify-between mt-1">
-                  <span className="sp-opacity-hint">10% (nearly transparent)</span>
-                  <span className="sp-opacity-hint">95% (solid)</span>
-                </div>
-              </div>
-            )}
-
             {/* Chat Text Size */}
             <SectionHeader
               icon={
@@ -747,6 +696,38 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 label="Chat Text Size"
               />
             </Row>
+
+            {/* Ghost Cursor */}
+            <SectionHeader
+              icon={
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 4l7.07 17 2.51-7.39L21 11.07z" />
+                </svg>
+              }
+              title="Ghost Cursor"
+              desc="Replace the system cursor with a hidden DOM cursor — invisible to screen capture."
+            />
+
+            <Row>
+              <Label
+                title="Ghost Cursor"
+                desc="Hides the system cursor and shows a custom cursor only visible on your screen"
+              />
+              <Toggle
+                checked={settings.ghostCursor}
+                onChange={v => update('ghostCursor', v)}
+                label="Ghost cursor"
+              />
+            </Row>
+
+            {settings.ghostCursor && (
+              <div className="sp-active-badge flex items-center gap-2 py-2 px-3">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className="sp-active-badge-icon">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+                <span className="sp-active-badge-text">Ghost Cursor Active — system cursor hidden</span>
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -503,8 +503,22 @@ export function isPinnedActive(): boolean {
   return _pinnedEnabled;
 }
 
-let _stealthEnabled = false;
-let _pinnedEnabled = false;
+let _stealthEnabled    = false;
+let _pinnedEnabled     = false;
+let _ghostCursorActive = true; // ghost cursor is ON by default → content protection active from the start
+let _isShrunk          = false;
+let _preShrinkSize: [number, number] = [560, 720];
+let _isMedium          = false;
+let _preMediumSize: [number, number] = [560, 720];
+
+/**
+ * Apply content protection.  Always ON — this is a stealth app and the window
+ * must never appear in screen-share recordings regardless of mode.
+ */
+export function syncContentProtection(win: BrowserWindow) {
+  if (!win || win.isDestroyed()) return;
+  win.setContentProtection(true);
+}
 
 export function registerIpcHandlers(): void {
 
@@ -1222,6 +1236,40 @@ export function registerIpcHandlers(): void {
     win.setContentProtection(false);
   }
 
+  // ── S key: shrink window to half size / restore ────────────────────────────
+  ipcMain.handle('window:shrink-toggle', async () => {
+    const win = getWindow();
+    if (!win || win.isDestroyed()) return false;
+    _isShrunk = !_isShrunk;
+    _isMedium = false; // cancel medium mode when switching to small
+    if (_isShrunk) {
+      _preShrinkSize = win.getSize() as [number, number];
+      win.setMinimumSize(100, 100);
+      win.setSize(Math.round(_preShrinkSize[0] / 2), Math.round(_preShrinkSize[1] / 2));
+    } else {
+      win.setSize(_preShrinkSize[0], _preShrinkSize[1]);
+      win.setMinimumSize(500, 500);
+    }
+    return _isShrunk;
+  });
+
+  // ── M key: medium window (75% of full size) / restore ─────────────────────
+  ipcMain.handle('window:medium-toggle', async () => {
+    const win = getWindow();
+    if (!win || win.isDestroyed()) return false;
+    _isMedium = !_isMedium;
+    _isShrunk = false; // cancel small mode when switching to medium
+    if (_isMedium) {
+      _preMediumSize = win.getSize() as [number, number];
+      win.setMinimumSize(100, 100);
+      win.setSize(420, 540);
+    } else {
+      win.setSize(_preMediumSize[0], _preMediumSize[1]);
+      win.setMinimumSize(500, 500);
+    }
+    return _isMedium;
+  });
+
   ipcMain.handle('window:toggle-aot', async () => {
     const win = getWindow();
     if (win) {
@@ -1358,6 +1406,20 @@ export function registerIpcHandlers(): void {
     console.log('[IPC] Stealth mode: OFF (pin still active:', _pinnedEnabled, ')');
   }
 
+  // ─── GHOST CURSOR — content protection ──────────────────────────────────
+  // When the ghost cursor is active the renderer asks the main process to
+  // enable setContentProtection so the DOM cursor elements are invisible to
+  // screen-sharing / recording software (they're only visible on the user's
+  // own display).  stealth / pin mode already do this independently; we just
+  // fold ghost cursor into the same gate so no source accidentally drops
+  // protection while another still needs it.
+  ipcMain.handle('window:set-ghost-cursor-protection', async (_event, enabled: boolean) => {
+    _ghostCursorActive = enabled;
+    const win = getWindow();
+    if (win) syncContentProtection(win);
+    return true;
+  });
+
   ipcMain.handle('window:toggle-stealth', async () => {
     const win = getWindow();
     if (win) {
@@ -1432,9 +1494,15 @@ export function registerIpcHandlers(): void {
         break;
       }
       case 'center-top': {
-        // Center top
         const x = Math.round((sw - ww) / 2);
         const y = 12;
+        win.setBounds({ x, y, width: ww, height: wh });
+        break;
+      }
+      case 'bottom': {
+        // Bottom center
+        const x = Math.round((sw - ww) / 2);
+        const y = sh - wh - 12;
         win.setBounds({ x, y, width: ww, height: wh });
         break;
       }

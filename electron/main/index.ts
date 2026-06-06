@@ -33,8 +33,9 @@ import {
   Tray,
   Menu,
   nativeImage,
+  screen,
 } from 'electron';
-import { registerIpcHandlers, isStealthActive, isPinnedActive } from '../ipc/handlers';
+import { registerIpcHandlers, isStealthActive, isPinnedActive, syncContentProtection } from '../ipc/handlers';
 import { initializeDatabase, closeDatabase } from '../storage/db';
 
 let mainWindow: BrowserWindow | null = null;
@@ -85,14 +86,13 @@ if (!gotLock) {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       if (isStealthActive()) {
-        mainWindow.setContentProtection(true);
         mainWindow.setSkipTaskbar(true);
         mainWindow.setTitle(' ');
         mainWindow.setAlwaysOnTop(true, 'screen-saver');
       } else if (isPinnedActive()) {
-        mainWindow.setContentProtection(true);
         mainWindow.setAlwaysOnTop(true, 'screen-saver');
       }
+      syncContentProtection(mainWindow);
       mainWindow.focus();
     }
   });
@@ -145,10 +145,50 @@ function createWindow(): void {
     mainWindow.loadFile(path.join(__dirname, '../../dist/index.html'));
   }
 
+  // Apply content protection immediately — ghost cursor is ON by default so the
+  // window should be invisible to screen-capture tools from the very first frame.
+  syncContentProtection(mainWindow);
+
   mainWindow.once('ready-to-show', () => {
+    if (mainWindow) syncContentProtection(mainWindow); // protect BEFORE the window becomes visible
     mainWindow?.show();
     mainWindow?.focus();
   });
+
+  /* ── Ghost cursor — relay OS cursor position to renderer ──────
+     DOM mousemove events are swallowed by the <webview> renderer,
+     so the parent renderer never sees them while the cursor is over
+     the ChatGPT panel.  We poll screen.getCursorScreenPoint() in
+     the main process (~60 fps) and convert to window-relative
+     coordinates so GhostCursor.tsx can position its dot correctly
+     whether the cursor is over normal DOM or over the webview.   */
+  let cursorRelayInterval: NodeJS.Timeout | null = null;
+
+  const startCursorRelay = () => {
+    if (cursorRelayInterval) return; // already running
+    cursorRelayInterval = setInterval(() => {
+      const win = mainWindow;
+      if (!win || win.isDestroyed() || !win.isVisible()) return;
+      const { x: cx, y: cy } = screen.getCursorScreenPoint();
+      const b = win.getContentBounds(); // DIP coords, same as renderer
+      win.webContents.send('cursor:pos', { x: cx - b.x, y: cy - b.y });
+    }, 16); // ~60 fps
+  };
+
+  const stopCursorRelay = () => {
+    if (cursorRelayInterval) {
+      clearInterval(cursorRelayInterval);
+      cursorRelayInterval = null;
+    }
+  };
+
+  // Relay runs whenever the window is visible — NOT tied to focus so the ghost
+  // cursor tracks correctly even when another app has keyboard focus.
+  // Only pause on hide/close (window is gone from screen entirely).
+  mainWindow.on('focus',  startCursorRelay);
+  mainWindow.on('show',   startCursorRelay);
+  mainWindow.on('hide',   stopCursorRelay);
+  mainWindow.on('closed', stopCursorRelay);
 
   // Open external links in system browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -246,17 +286,19 @@ app.whenReady().then(async () => {
             mainWindow.hide();
           } else {
             if (mainWindow.isMinimized()) mainWindow.restore();
-            mainWindow.show();
-            mainWindow.focus();
-            if (isStealthActive()) {
-              mainWindow.setContentProtection(true);
-              mainWindow.setSkipTaskbar(true);
-              mainWindow.setTitle(' ');
-              mainWindow.setAlwaysOnTop(true, 'screen-saver');
-            } else if (isPinnedActive()) {
-              mainWindow.setContentProtection(true);
-              mainWindow.setAlwaysOnTop(true, 'screen-saver');
-            }
+            syncContentProtection(mainWindow);
+            setTimeout(() => {
+              if (!mainWindow || mainWindow.isDestroyed()) return;
+              mainWindow.show();
+              mainWindow.focus();
+              if (isStealthActive()) {
+                mainWindow.setSkipTaskbar(true);
+                mainWindow.setTitle(' ');
+                mainWindow.setAlwaysOnTop(true, 'screen-saver');
+              } else if (isPinnedActive()) {
+                mainWindow.setAlwaysOnTop(true, 'screen-saver');
+              }
+            }, 60);
           }
         },
       },
@@ -267,12 +309,15 @@ app.whenReady().then(async () => {
     tray.on('double-click', () => {
       if (!mainWindow) return;
       if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      mainWindow.focus();
-      if (isPinnedActive() && !isStealthActive()) {
-        mainWindow.setContentProtection(true);
-        mainWindow.setAlwaysOnTop(true, 'screen-saver');
-      }
+      syncContentProtection(mainWindow);
+      setTimeout(() => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        mainWindow.show();
+        mainWindow.focus();
+        if (isPinnedActive() && !isStealthActive()) {
+          mainWindow.setAlwaysOnTop(true, 'screen-saver');
+        }
+      }, 60);
     });
   } catch (err) {
     console.warn('[Main] Failed to create tray icon:', err);
@@ -282,26 +327,40 @@ app.whenReady().then(async () => {
   // The toggle function shared by all shortcut keys + tray.
   // "accessible" = visible AND not minimized. A minimized window has
   // isVisible()===true on Windows, so we must check both.
+  //
+  // Flash prevention strategy:
+  // Windows resets WDA_EXCLUDEFROMCAPTURE during the hide→show transition.
+  // Fix: (1) debounce rapid toggling so the compositor has time to settle,
+  //      (2) delay show() by 100ms after setContentProtection,
+  //      (3) reapply content protection immediately after show() as a safety net.
+  let _toggleCooldown = false;
   const toggleWindow = () => {
-    if (!mainWindow) return;
+    if (!mainWindow || _toggleCooldown) return;
+    _toggleCooldown = true;
+    // 400ms cooldown prevents rapid toggling that causes compositor race conditions
+    setTimeout(() => { _toggleCooldown = false; }, 400);
+
     const accessible = mainWindow.isVisible() && !mainWindow.isMinimized();
     if (accessible) {
       mainWindow.hide();
     } else {
-      // Restore first so the window isn't in a minimized state when shown
       if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.show();
-      if (isStealthActive()) {
-        mainWindow.setContentProtection(true);
-        mainWindow.setSkipTaskbar(true);
-        mainWindow.setTitle(' ');
-        mainWindow.setAlwaysOnTop(true, 'screen-saver');
-      } else if (isPinnedActive()) {
-        // Re-apply pin props (Windows can lose them after hide/restore)
-        mainWindow.setContentProtection(true);
-        mainWindow.setAlwaysOnTop(true, 'screen-saver');
-      }
-      mainWindow.focus();
+      // Apply protection BEFORE show so Windows compositor can process it first
+      syncContentProtection(mainWindow);
+      setTimeout(() => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        mainWindow.show();
+        // Reapply immediately after show — Windows may reset the flag during transition
+        syncContentProtection(mainWindow);
+        if (isStealthActive()) {
+          mainWindow.setSkipTaskbar(true);
+          mainWindow.setTitle(' ');
+          mainWindow.setAlwaysOnTop(true, 'screen-saver');
+        } else if (isPinnedActive()) {
+          mainWindow.setAlwaysOnTop(true, 'screen-saver');
+        }
+        mainWindow.focus();
+      }, 100);
     }
   };
 
